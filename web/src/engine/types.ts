@@ -1,0 +1,60 @@
+export type EngineMode = "human-engine" | "engine-engine" | "human-human";
+export type Side = "white" | "black";
+
+export interface AnalysisLine {
+  score_cp?: number;
+  mate_in?: number;
+  moves: string[];
+}
+
+export interface Analysis {
+  root_fen: string;
+  depth: number;
+  nodes: number;
+  elapsed_ms: number;
+  timed_out: boolean;
+  lines: AnalysisLine[];
+}
+
+export interface AnalyzeRequest {
+  type: "analyze";
+  requestId: number;
+  fen: string;
+  historyFens: string[];
+  thinkTimeMs: number;
+  purpose: "analysis" | "move";
+}
+
+export interface InitializeRequest {
+  type: "initialize";
+}
+export interface CancelRequest {
+  type: "cancel";
+  requestId: number;
+}
+export type WorkerRequest = InitializeRequest | AnalyzeRequest | CancelRequest;
+
+export interface AnalysisMessage {
+  type: "analysis";
+  requestId: number;
+  analysis: Analysis;
+}
+export interface CompleteMessage {
+  type: "complete";
+  requestId: number;
+  purpose: "analysis" | "move";
+  analysis: Analysis | null;
+}
+export interface ErrorMessage {
+  type: "error";
+  requestId: number;
+  message: string;
+}
+export interface ReadyMessage {
+  type: "ready";
+}
+export type WorkerMessage =
+  | AnalysisMessage
+  | CompleteMessage
+  | ErrorMessage
+  | ReadyMessage;

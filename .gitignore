@@ -1,0 +1,9 @@
+.DS_Store
+.idea/
+.vscode/
+node_modules/
+dist/
+coverage/
+engine/target/
+web/node_modules/
+web/dist/
