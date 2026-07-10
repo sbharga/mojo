@@ -1,0 +1,17 @@
+{
+  "name": "mojo-engine",
+  "type": "module",
+  "description": "Mojo chess search engine compiled to WebAssembly",
+  "version": "0.1.0",
+  "license": "MIT",
+  "files": [
+    "mojo_engine_bg.wasm",
+    "mojo_engine.js",
+    "mojo_engine.d.ts"
+  ],
+  "main": "mojo_engine.js",
+  "types": "mojo_engine.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
