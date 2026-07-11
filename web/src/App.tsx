@@ -129,15 +129,12 @@ function App() {
     if (legalMove && !legalMove.promotion) play(selectedSquare, square)
     else selectSquare(square)
   }
-  const whiteAnalysis = useMemo(() => {
-    if (!analysis || analysis.root_fen.split(' ')[1] === 'w') return analysis
-    return { ...analysis, lines: analysis.lines.map((line) => ({ ...line, score_cp: line.score_cp === undefined ? undefined : -line.score_cp, mate_in: line.mate_in === undefined ? undefined : -line.mate_in })) }
-  }, [analysis])
   const arrows = useMemo<Array<[Square, Square, string]>>(() => {
     const move = bestMoveForPosition(analysis, fen)
     return move ? [[move.slice(0, 2) as Square, move.slice(2, 4) as Square, '#f4bd2e']] : []
   }, [analysis, fen])
-  const evalLine = whiteAnalysis?.lines[0]
+  // Worker results are already normalized to White's perspective.
+  const evalLine = analysis?.lines[0]
 
   return <main className="app"><header><div className="brand"><span className="brand__mark">♞</span><div><h1>Mojo</h1><p>Browser chess engine</p></div></div><div className="header-actions"><div className="status"><i className={isReady ? 'ready' : ''} />{error ?? (gameOver ? 'Game over' : engineToMove ? 'Mojo is thinking' : `${turn} to move`)}</div><button className="icon-button" onClick={() => setDialog('settings')} title="Settings" aria-label="Settings">⚙</button></div></header><div className="workspace"><div className="board-area"><EvaluationBar scoreCp={evalLine?.score_cp ?? null} mateIn={evalLine?.mate_in ?? null} /><div className="board-shell" ref={boardShell}>{previewFen && <button className="preview-banner" onClick={() => setPreviewFen(null)}>Viewing variation — return to live game</button>}<Chessboard id="mojo-board" position={previewFen ?? fen} boardOrientation={orientation} onPieceDrop={play} onPieceClick={(_, square) => selectSquare(square as Square)} onPieceDragBegin={(_, square) => selectSquare(square as Square)} onSquareClick={(square) => clickSquare(square as Square)} arePiecesDraggable={humanCanMove} autoPromoteToQueen={false} customArrows={arrows} boardWidth={boardWidth} customDarkSquareStyle={{ backgroundColor: '#779556' }} customLightSquareStyle={{ backgroundColor: '#ebecd0' }} customSquareStyles={legalSquareStyles as never} /></div></div><aside style={{ height: sidebarHeight }}><AnalysisPanel analysis={analysis} onSelectMove={playAnalysisMove} /><MoveHistory history={history} onReset={newGame} onUndo={undo} onReview={review} disabled={Boolean(previewFen)} /></aside></div>{dialog === 'settings' && <div className="modal-backdrop" role="presentation" onClick={() => setDialog(null)}><div className="modal modal--settings" onClick={(event) => event.stopPropagation()}><div className="modal__heading"><h2>Settings</h2><button type="button" onClick={() => setDialog(null)}>×</button></div><SettingsPanel mode={mode} humanSide={humanSide} thinkTime={thinkTime} running={running} onMode={setMode} onSide={(side) => { setHumanSide(side); newGame() }} onTime={setThinkTime} onToggle={() => setRunning((value) => !value)} onFlip={() => setFlipped((value) => !value)} onFen={() => setDialog('fen')} onPgn={() => setDialog('pgn')} onExport={() => setDialog('export')} /></div></div>}{(dialog === 'fen' || dialog === 'pgn' || dialog === 'export') && <SetupDialog title={dialog === 'fen' ? 'Load FEN position' : dialog === 'pgn' ? 'Load PGN game' : 'Export PGN'} initialValue={dialog === 'fen' ? fen : game.current.pgn()} onClose={() => setDialog(null)} onSubmit={dialog === 'fen' ? loadFen : dialog === 'pgn' ? loadPgn : () => setDialog(null)} />}</main>
 }

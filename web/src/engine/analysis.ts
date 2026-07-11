@@ -14,3 +14,19 @@ export function formatAnalysisScore(line: Analysis["lines"][number]) {
   const score = line.score_cp ?? 0;
   return `${score >= 0 ? "+" : ""}${(score / 100).toFixed(2)}`;
 }
+// The engine uses the standard negamax convention (positive means the side to
+// move is ahead), while every UI score is shown from White's perspective.
+export function toWhiteRelative(
+  result: Omit<Analysis, "root_fen">,
+  fen: string,
+): Omit<Analysis, "root_fen"> {
+  if (fen.split(" ")[1] !== "b") return result;
+  return {
+    ...result,
+    lines: result.lines.map((line) => ({
+      ...line,
+      score_cp: line.score_cp == null ? line.score_cp : -line.score_cp,
+      mate_in: line.mate_in == null ? line.mate_in : -line.mate_in,
+    })),
+  };
+}
