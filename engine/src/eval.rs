@@ -27,6 +27,12 @@ const ROOK_SEMI_OPEN_FILE_BONUS_MG: i32 = 10;
 const ROOK_SEMI_OPEN_FILE_BONUS_EG: i32 = 5;
 const KING_SHIELD_PAWN_BONUS_MG: i32 = 9;
 const TEMPO_BONUS: i32 = 10;
+// Bare-king mating guidance. These terms give shallow searches a useful
+// gradient in endings where material alone cannot distinguish progress.
+const MOP_UP_EDGE_WEIGHT: i32 = 35;
+const MOP_UP_KING_WEIGHT: i32 = 20;
+const ROOK_CONFINEMENT_WEIGHT: i32 = 12;
+const BN_CORNER_WEIGHT: i32 = 45;
 // Mobility bonus per reachable square, by piece (knight/bishop/rook/queen).
 const KNIGHT_MOBILITY_WEIGHT: i32 = 4;
 const BISHOP_MOBILITY_WEIGHT: i32 = 4;
@@ -197,6 +203,14 @@ pub(crate) fn evaluate(board: &Board) -> i32 {
         }
     }
 
+    // Once one side has only a king, reward the winning side for taking away
+    // space and walking its king in. Without this, most K+R/K+Q moves have
+    // almost identical material scores until mate happens to enter the search
+    // horizon. Bishop-and-knight is special: its king must be driven to a
+    // corner controlled by the bishop, not merely to any edge.
+    eg += bare_king_mating_bonus(board, Color::White);
+    eg -= bare_king_mating_bonus(board, Color::Black);
+
     phase = phase.min(24);
     let white_score = (mg * phase + eg * (24 - phase)) / 24;
     if board.side_to_move() == Color::White {
@@ -204,6 +218,77 @@ pub(crate) fn evaluate(board: &Board) -> i32 {
     } else {
         -white_score + TEMPO_BONUS
     }
+}
+
+fn bare_king_mating_bonus(board: &Board, attacker: Color) -> i32 {
+    let defender = !attacker;
+    if board.colors(defender).len() != 1 {
+        return 0;
+    }
+
+    let queens = board.colored_pieces(attacker, Piece::Queen);
+    let rooks = board.colored_pieces(attacker, Piece::Rook);
+    let bishops = board.colored_pieces(attacker, Piece::Bishop);
+    let knights = board.colored_pieces(attacker, Piece::Knight);
+    let has_major = !(queens | rooks).is_empty();
+    let bishop_and_knight = bishops.len() == 1
+        && knights.len() == 1
+        && !has_major
+        && board.colored_pieces(attacker, Piece::Pawn).is_empty();
+    if !has_major && !bishop_and_knight && bishops.len() < 2 {
+        return 0;
+    }
+
+    let attacking_king = board.king(attacker);
+    let defending_king = board.king(defender);
+    let king_distance = chebyshev_distance(attacking_king, defending_king);
+    let mut bonus = (7 - king_distance) * MOP_UP_KING_WEIGHT;
+
+    if bishop_and_knight {
+        let bishop = bishops
+            .into_iter()
+            .next()
+            .expect("one bishop was established");
+        let bishop_color = (bishop.file() as i32 + bishop.rank() as i32) & 1;
+        let corner_distance = [Square::A1, Square::H1, Square::A8, Square::H8]
+            .into_iter()
+            .filter(|corner| (corner.file() as i32 + corner.rank() as i32) & 1 == bishop_color)
+            .map(|corner| chebyshev_distance(defending_king, corner))
+            .min()
+            .unwrap_or(7);
+        bonus += (7 - corner_distance) * BN_CORNER_WEIGHT;
+    } else {
+        let edge_distance = (defending_king.file() as i32)
+            .min(7 - defending_king.file() as i32)
+            .min(defending_king.rank() as i32)
+            .min(7 - defending_king.rank() as i32);
+        bonus += (3 - edge_distance) * MOP_UP_EDGE_WEIGHT;
+
+        // A rook/queen need not check to make progress: placing it across the
+        // king cuts off whole ranks or files. Prefer the smaller resulting box.
+        for piece in rooks | queens {
+            let file_box = if defending_king.file() < piece.file() {
+                piece.file() as i32
+            } else if defending_king.file() > piece.file() {
+                7 - piece.file() as i32
+            } else {
+                7
+            };
+            let rank_box = if defending_king.rank() < piece.rank() {
+                piece.rank() as i32
+            } else if defending_king.rank() > piece.rank() {
+                7 - piece.rank() as i32
+            } else {
+                7
+            };
+            bonus += (7 - file_box.min(rank_box)) * ROOK_CONFINEMENT_WEIGHT;
+        }
+    }
+    bonus
+}
+
+fn chebyshev_distance(a: Square, b: Square) -> i32 {
+    ((a.file() as i32 - b.file() as i32).abs()).max((a.rank() as i32 - b.rank() as i32).abs())
 }
 
 pub(crate) fn insufficient_material(board: &Board) -> bool {

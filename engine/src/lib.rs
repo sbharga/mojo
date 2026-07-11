@@ -277,6 +277,21 @@ mod tests {
     }
 
     #[test]
+    fn rook_mate_eval_rewards_cutting_off_the_bare_king() {
+        let loose = "8/8/8/8/4k3/8/8/R5K1 w - - 0 1".parse::<Board>().unwrap();
+        let confined = "8/8/8/8/4k3/8/R7/6K1 w - - 0 1".parse::<Board>().unwrap();
+        assert!(evaluate(&confined) > evaluate(&loose));
+    }
+
+    #[test]
+    fn bishop_knight_eval_prefers_the_bishops_corner() {
+        // The c1 bishop controls a1/h8, so h8 should be preferable to h1.
+        let right_corner = "7k/8/8/8/8/8/4N3/2B3K1 w - - 0 1".parse::<Board>().unwrap();
+        let wrong_corner = "8/8/8/8/8/8/4N2k/2B3K1 w - - 0 1".parse::<Board>().unwrap();
+        assert!(evaluate(&right_corner) > evaluate(&wrong_corner));
+    }
+
+    #[test]
     fn recognizes_basic_dead_positions() {
         for fen in [
             "8/8/8/8/8/8/8/K6k w - - 0 1",

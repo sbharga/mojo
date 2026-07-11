@@ -8,28 +8,11 @@ import type {
   WorkerMessage,
   WorkerRequest,
 } from "./types";
+import { toWhiteRelative } from "./analysis";
 
 let initialized = false;
 let cancelledBefore = 0;
 let engine: Engine | null = null;
-
-// The engine reports score_cp/mate_in relative to the side to move
-// (standard negamax convention), but the UI always displays scores
-// relative to White, so flip the sign when Black is on move.
-function toWhiteRelative(
-  result: Omit<Analysis, "root_fen">,
-  fen: string,
-): Omit<Analysis, "root_fen"> {
-  if (fen.split(" ")[1] !== "b") return result;
-  return {
-    ...result,
-    lines: result.lines.map((line) => ({
-      ...line,
-      score_cp: line.score_cp == null ? line.score_cp : -line.score_cp,
-      mate_in: line.mate_in == null ? line.mate_in : -line.mate_in,
-    })),
-  };
-}
 
 async function ensureEngine() {
   if (!initialized) {
