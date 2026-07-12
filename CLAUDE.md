@@ -9,6 +9,17 @@ compiles to WebAssembly and runs inside a Web Worker, so analysis never blocks
 the React UI and no chess positions leave the browser. Standard chess only —
 no variants, no online play, not a chess.com clone.
 
+The engine's design goal is to be extremely lightweight and lightning fast
+while staying as accurate as possible — it has to search deeply inside a
+browser tab's CPU and memory budget, not a server's. Prefer changes that keep
+the Wasm binary small and the search fast per node over changes that add
+weight for marginal accuracy; when a change trades one of these for another
+(e.g. a pruning heuristic that risks tactical blindness, or a new dependency),
+justify the trade explicitly and verify it with `test:strength` and
+`selfplay` rather than intuition. Always follow the project's enforced best
+practices (`clippy -D warnings`, `cargo fmt`, `forbid`-lint `unsafe_code`,
+ESLint/TypeScript strictness) rather than working around them.
+
 ## Requirements
 
 - Rust stable with the `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`)
@@ -21,11 +32,14 @@ All frontend commands run from `web/` (or via `--prefix web` from the repo root)
 
 - `npm --prefix web run dev` — builds the Wasm package, then starts Vite.
 - `npm --prefix web run build` — builds the Wasm package, type-checks (`tsc -b`), and produces the deployable static site.
-- `npm --prefix web run check` — lint + typecheck + unit tests (`eslint . && tsc -b && vitest run`). Run this before considering frontend work done.
+- `npm --prefix web run check` — lint + typecheck + unit tests + all generated ECO FEN validations + deterministic Wasm tactical regressions + a neutral self-play smoke test. Run this before considering frontend or engine integration work done. It does not rebuild Wasm first.
 - `npm --prefix web run test` — `vitest run` only.
 - `npm --prefix web run lint` — `eslint .` only.
 - `npm --prefix web run build:engine` — rebuilds `engine/pkg` from the Rust crate (`wasm-pack build --target web --out-dir pkg --release`). Re-run this after any change under `engine/src`; the web app imports the checked-in `engine/pkg` output, not the crate source, directly.
 - `npm --prefix web run bench:engine` — rebuilds the engine, then runs `engine/bench.mjs`, which reports completed depth, deadline behavior, Wasm size, and memory across engine-time presets for a fixed set of positions.
+- `npm --prefix web run test:strength` — runs `engine/accuracy.mjs` against the generated Wasm package. The fixed-depth positions cover basic mates, material wins, forks, and promotions; rebuild the engine first after Rust changes.
+- `npm --prefix web run selfplay -- --baseline <path>` — compares the current candidate Wasm with an ABI-compatible baseline using paired, color-swapped games and reports W/D/L plus a paired-score SPRT. Fixed depth is deterministic; use `--move-time-ms` for performance-affecting changes so the match reflects browser play. By default it uses the 2,010 unique FENs generated from all 2,014 records in `engine/openings.json`; `--openings N` deterministically samples across the full ECO-sorted corpus, while `--openings-file` supplies another suite. Relative paths are resolved from the repository root.
+- `node engine/generate-openings.mjs <eco.pgn> engine/openings.json` — reproducibly converts every PGN record to a full FEN with ECO metadata. `npm --prefix web run test:openings` validates all generated positions with both `chess.js` and the Wasm engine. Source and license: `engine/OPENINGS_LICENSE`.
 
 Rust:
 
@@ -57,6 +71,11 @@ CI (`.github/workflows/ci.yml`) runs, in order: `cargo fmt --check`, `cargo clip
   binary) that `web/` imports directly — it is committed and must be
   regenerated (`npm run build:engine`) after any `engine/src` change; it is
   not auto-rebuilt by `npm run check` or `npm test`.
+- `engine/Cargo.toml`'s `[profile.release]` (`codegen-units = 1`, `lto =
+  "fat"`, `panic = "abort"`, `strip = true`) plus `wasm-opt -O
+  --enable-bulk-memory` on the `wasm-pack` output are what keep the binary
+  small and fast in-browser; `bench:engine` reports the resulting Wasm size
+  alongside search speed so regressions in either are visible together.
 
 ### Worker protocol (web/src/engine/)
 

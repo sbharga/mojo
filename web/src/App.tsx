@@ -137,15 +137,20 @@ function App() {
     const piece = game.current.get(square)
     if (piece && piece.color === game.current.turn()) setSelectedSquare(square)
   }
+  const lastMove = viewPly > 0 ? history[viewPly - 1] : null
   const legalSquareStyles = useMemo(() => {
     const styles: Record<string, Record<string, string>> = {}
+    if (lastMove) {
+      styles[lastMove.from] = { backgroundColor: '#f6f66980' }
+      styles[lastMove.to] = { backgroundColor: '#f6f66980' }
+    }
     if (!selectedSquare || !humanCanMove) return styles
     styles[selectedSquare] = { backgroundColor: '#f6f669b0' }
     game.current.moves({ square: selectedSquare, verbose: true }).forEach((move) => {
       styles[move.to] = game.current.get(move.to) ? { boxShadow: 'inset 0 0 0 5px #f6f669b0' } : { background: 'radial-gradient(circle, #f6f669a8 0 19%, transparent 21%)' }
     })
     return styles
-  }, [humanCanMove, selectedSquare])
+  }, [humanCanMove, lastMove, selectedSquare])
   const clickSquare = (square: Square) => {
     if (!selectedSquare || !humanCanMove) return selectSquare(square)
     const legalMove = game.current.moves({ square: selectedSquare, verbose: true }).find((move) => move.to === square)
