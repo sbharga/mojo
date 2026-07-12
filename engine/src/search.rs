@@ -120,6 +120,7 @@ pub(crate) struct SearchCore {
     pv_len: [u8; MAX_PLY],
     prior_positions: Vec<u64>,
     path: ArrayVec<u64, MAX_PLY>,
+    null_boundary: Option<usize>,
     previous_scores: Vec<i32>,
     root_key: u64,
     generation: u8,
@@ -141,6 +142,7 @@ impl SearchCore {
             pv_len: [0; MAX_PLY],
             prior_positions: Vec::new(),
             path: ArrayVec::new(),
+            null_boundary: None,
             previous_scores: Vec::new(),
             root_key: 0,
             generation: 0,
@@ -182,6 +184,7 @@ impl SearchCore {
         self.deadline_ms = crate::now_ms() + time_limit_ms.max(5.0);
         self.path.clear();
         self.path.push(repetition_key(board));
+        self.null_boundary = None;
         if self.is_draw(board) {
             return SearchResult {
                 nodes: 0,
@@ -240,14 +243,14 @@ impl SearchCore {
         mut alpha: i32,
         beta: i32,
     ) -> Option<SearchLine> {
+        let key = rule_key(board);
+        let original_alpha = alpha;
         let mut moves = legal_moves(board);
         moves.retain(|mv| !excluded.contains(mv));
         if moves.is_empty() {
             return None;
         }
-        let tt_best = self
-            .probe(rule_key(board))
-            .and_then(|entry| decode_move(entry.best));
+        let tt_best = self.probe(key).and_then(|entry| decode_move(entry.best));
         self.order_moves(board, &mut moves, tt_best, 0);
         self.pv_len[0] = 0;
         let mut best_score = -INF;
@@ -285,9 +288,25 @@ impl SearchCore {
             }
         }
 
-        best_move.map(|_| SearchLine {
-            score: best_score,
-            moves: self.pv_line(0),
+        best_move.map(|best_move| {
+            // Only the primary root search represents the full legal move set.
+            // Storing an excluded MultiPV search here would make its second- or
+            // third-best move displace the principal move before the next
+            // iterative-deepening step.
+            if excluded.is_empty() && !self.timed_out {
+                let bound = if best_score <= original_alpha {
+                    Bound::Upper
+                } else if best_score >= beta {
+                    Bound::Lower
+                } else {
+                    Bound::Exact
+                };
+                self.store(key, depth, score_to_tt(best_score, 0), bound, best_move);
+            }
+            SearchLine {
+                score: best_score,
+                moves: self.pv_line(0),
+            }
         })
     }
 
@@ -357,6 +376,8 @@ impl SearchCore {
             && let Some(null_board) = board.null_move()
         {
             let reduction = NULL_MOVE_BASE_REDUCTION + depth / NULL_MOVE_DEPTH_DIVISOR;
+            let previous_null_boundary = self.null_boundary;
+            self.null_boundary = Some(self.path.len());
             self.path.push(repetition_key(&null_board));
             let score = -self.negamax(
                 &null_board,
@@ -369,11 +390,16 @@ impl SearchCore {
                 next_extensions,
             );
             self.path.pop();
+            self.null_boundary = previous_null_boundary;
             if self.timed_out {
                 return 0;
             }
             if score >= beta {
-                return score;
+                return if board.generate_moves(|_| true) {
+                    score
+                } else {
+                    0
+                };
             }
         }
 
@@ -386,7 +412,11 @@ impl SearchCore {
             let eval = evaluate(board);
             static_eval = Some(eval);
             if eval - RFP_MARGIN_PER_PLY * i32::from(depth) >= beta {
-                return eval;
+                return if board.generate_moves(|_| true) {
+                    eval
+                } else {
+                    0
+                };
             }
         }
 
@@ -551,6 +581,7 @@ impl SearchCore {
             }
             if !in_check
                 && capture
+                && mv.promotion.is_none()
                 && !gives_check
                 && stand_pat + captured_value(board, mv) + DELTA_PRUNING_MARGIN < alpha
             {
@@ -578,11 +609,23 @@ impl SearchCore {
             return true;
         }
         let current = *self.path.last().unwrap_or(&repetition_key(board));
-        self.prior_positions
-            .iter()
-            .chain(self.path.iter())
-            .filter(|key| **key == current)
-            .count()
+        // A null move is a search heuristic, not a legal move. Positions from
+        // real game history or the pre-null search path therefore cannot
+        // contribute to a repetition claim inside that synthetic subtree.
+        let prior_matches = if self.null_boundary.is_none() {
+            self.prior_positions
+                .iter()
+                .filter(|key| **key == current)
+                .count()
+        } else {
+            0
+        };
+        let path_start = self.null_boundary.unwrap_or(0);
+        prior_matches
+            + self.path[path_start..]
+                .iter()
+                .filter(|key| **key == current)
+                .count()
             >= 3
     }
 
@@ -598,20 +641,31 @@ impl SearchCore {
     }
 
     fn order_moves(&self, board: &Board, moves: &mut [Move], tt_best: Option<Move>, ply: usize) {
-        moves.sort_unstable_by_key(|mv| {
-            let score = if Some(*mv) == tt_best {
-                10_000_000
-            } else if is_capture(board, *mv) {
-                1_000_000 + static_exchange(board, *mv) * 32 + captured_value(board, *mv)
-            } else if mv.promotion.is_some() {
-                950_000 + mv.promotion.map_or(0, piece_value)
-            } else if ply < MAX_PLY && self.killers[ply].contains(&Some(*mv)) {
-                900_000
-            } else {
-                self.history[mv.from as usize][mv.to as usize]
-            };
-            Reverse(score)
-        });
+        // `sort_unstable_by_key` may evaluate its key function more than once
+        // per element. SEE is much more expensive than comparing an integer,
+        // so cache every move's ordering score before sorting.
+        let mut scored: ArrayVec<(i32, Move), MAX_MOVES> = moves
+            .iter()
+            .map(|&mv| (self.move_order_score(board, mv, tt_best, ply), mv))
+            .collect();
+        scored.sort_unstable_by_key(|&(score, _)| Reverse(score));
+        for (slot, (_, mv)) in moves.iter_mut().zip(scored) {
+            *slot = mv;
+        }
+    }
+
+    fn move_order_score(&self, board: &Board, mv: Move, tt_best: Option<Move>, ply: usize) -> i32 {
+        if Some(mv) == tt_best {
+            10_000_000
+        } else if is_capture(board, mv) {
+            1_000_000 + static_exchange(board, mv) * 32 + captured_value(board, mv)
+        } else if mv.promotion.is_some() {
+            950_000 + mv.promotion.map_or(0, piece_value)
+        } else if ply < MAX_PLY && self.killers[ply].contains(&Some(mv)) {
+            900_000
+        } else {
+            self.history[mv.from as usize][mv.to as usize]
+        }
     }
 
     /// Like `order_moves`, but for the tactical-only move list used in
@@ -730,9 +784,26 @@ pub(crate) fn played(board: &Board, mv: Move) -> Board {
 }
 
 pub(crate) fn fallback(board: &Board) -> Option<Move> {
-    let mut moves = legal_moves(board);
-    moves.sort_unstable_by_key(|mv| evaluate(&played(board, *mv)));
-    moves.first().copied()
+    let mut scored: ArrayVec<(i32, Move), MAX_MOVES> = legal_moves(board)
+        .into_iter()
+        .map(|mv| {
+            let child = played(board, mv);
+            let score = if child.halfmove_clock() >= 100 || insufficient_material(&child) {
+                0
+            } else if legal_moves(&child).is_empty() {
+                if child.checkers().is_empty() {
+                    0
+                } else {
+                    -MATE_SCORE
+                }
+            } else {
+                evaluate(&child)
+            };
+            (score, mv)
+        })
+        .collect();
+    scored.sort_unstable_by_key(|&(score, _)| score);
+    scored.first().map(|&(_, mv)| mv)
 }
 
 fn terminal_score(board: &Board, ply: usize) -> i32 {
@@ -955,5 +1026,71 @@ mod tests {
             .parse::<Board>()
             .unwrap();
         assert!(static_exchange(&losing, "d1d7".parse().unwrap()) < 0);
+    }
+
+    #[test]
+    fn root_table_entry_tracks_the_primary_multipv_line() {
+        let board = Board::default();
+        let mut search = SearchCore::new();
+        search.set_position(&board, &[]);
+        let result = search.analyze_depth(&board, 4, 3, 10_000.0);
+        let primary = result.lines[0].moves[0];
+        let entry = search.probe(rule_key(&board)).unwrap();
+
+        assert_eq!(entry.depth, 4);
+        assert_eq!(entry.bound, Bound::Exact);
+        assert_eq!(decode_move(entry.best), Some(primary));
+    }
+
+    #[test]
+    fn null_move_boundary_excludes_real_history_from_repetition() {
+        let board = Board::default().null_move().unwrap();
+        let key = repetition_key(&board);
+        let mut search = SearchCore::new();
+        search.prior_positions = vec![key, key];
+        search.path.push(repetition_key(&Board::default()));
+        search.null_boundary = Some(search.path.len());
+        search.path.push(key);
+
+        assert!(!search.is_draw(&board));
+        search.null_boundary = None;
+        assert!(search.is_draw(&board));
+    }
+
+    #[test]
+    fn quiescence_does_not_delta_prune_capture_promotion() {
+        // The knight blocks g8, so gxh8=Q is White's only promotion. Counting
+        // only the captured rook makes delta pruning miss the new queen.
+        let board = "k5nr/6P1/2K5/8/8/8/8/8 w - - 0 1".parse::<Board>().unwrap();
+        let mut search = SearchCore::new();
+        search.path.push(repetition_key(&board));
+        let alpha = 400;
+
+        assert!(search.quiescence(&board, alpha, 1_000, 0) > alpha);
+    }
+
+    #[test]
+    fn fallback_prefers_immediate_checkmate() {
+        let board = "7k/5Q2/6K1/8/8/8/8/8 w - - 0 1".parse::<Board>().unwrap();
+        let child = played(&board, fallback(&board).unwrap());
+
+        assert!(legal_moves(&child).is_empty());
+        assert!(!child.checkers().is_empty());
+    }
+
+    #[test]
+    fn forward_pruning_does_not_miss_stalemate() {
+        // The pinned knight cannot uncover the h-file rook, while the king's
+        // two flight squares are covered by White's king.
+        let board = "7k/5K1n/8/8/8/8/8/7R b - - 0 1".parse::<Board>().unwrap();
+        let mut search = SearchCore::new();
+        search.path.push(repetition_key(&board));
+
+        assert!(legal_moves(&board).is_empty());
+        assert!(board.checkers().is_empty());
+        assert_eq!(
+            search.negamax(&board, 3, -1_001, -1_000, 0, false, true, 0),
+            0
+        );
     }
 }
