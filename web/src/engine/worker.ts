@@ -13,13 +13,22 @@ import { toWhiteRelative } from "./analysis";
 let initialized = false;
 let cancelledBefore = 0;
 let engine: Engine | null = null;
+let initialization: Promise<void> | null = null;
 
 async function ensureEngine() {
-  if (!initialized) {
+  if (initialized) return;
+  initialization ??= (async () => {
     await init({ module_or_path: wasmUrl });
     engine = new Engine();
     initialized = true;
     postMessage({ type: "ready" } satisfies WorkerMessage);
+  })();
+  try {
+    await initialization;
+  } catch (error) {
+    // Permit a later request to retry a transient initialization failure.
+    initialization = null;
+    throw error;
   }
 }
 

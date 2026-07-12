@@ -22,7 +22,9 @@ for the deployable static site. `npm --prefix web run check` performs linting,
 type checking, and unit tests. Rust checks are available through
 `cargo test --manifest-path engine/Cargo.toml`. Run
 `npm --prefix web run bench:engine` to measure completed depth, deadline
-behavior, Wasm size, and memory across the engine-time presets.
+behavior, Wasm size, and memory across the engine-time presets. Each benchmark
+sample uses a fresh engine instance so transposition-table warming does not
+skew comparisons between time budgets or MultiPV settings.
 
 ## Architecture
 
@@ -33,5 +35,6 @@ behavior, Wasm size, and memory across the engine-time presets.
   analysis by request id.
 
 Mojo is standard chess only in this release. It supports FEN and main-line PGN
-import/export, local human games, and engine games. It is not an online chess
-service or a chess.com clone.
+import/export, local human games, and engine games. The current game and UI
+settings are restored from browser storage when the page is reopened. Mojo is
+not an online chess service or a chess.com clone.

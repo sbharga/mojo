@@ -15,8 +15,17 @@ export function useEngine(onMove: (uci: string) => void) {
     worker.current = instance;
     instance.onmessage = (event: MessageEvent<WorkerMessage>) => {
       const message = event.data;
-      if (message.type === "ready") setIsReady(true);
-      if (message.type === "error") setError(message.message);
+      if (message.type === "ready") {
+        setIsReady(true);
+        setError(null);
+      }
+      // Request zero is initialization. Errors from superseded searches must
+      // not replace the status of the current position.
+      if (
+        message.type === "error" &&
+        (message.requestId === 0 || message.requestId === request.current)
+      )
+        setError(message.message);
       if (message.type === "analysis" && message.requestId === request.current)
         setAnalysis(message.analysis);
       if (
@@ -42,6 +51,7 @@ export function useEngine(onMove: (uci: string) => void) {
     ) => {
       request.current += 1;
       setAnalysis(null);
+      setError(null);
       const requestId = request.current;
       worker.current?.postMessage({ type: "cancel", requestId: requestId - 1 });
       worker.current?.postMessage({
