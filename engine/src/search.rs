@@ -61,6 +61,11 @@ const FUTILITY_MARGIN_PER_PLY: i32 = 100;
 /// once the move count exceeds a depth-scaled threshold.
 const LMP_MAX_DEPTH: i16 = 4;
 const LMP_BASE_MOVE_COUNT: usize = 4;
+/// Razoring: at shallow depth, if the static eval falls this far below alpha,
+/// drop straight into quiescence and trust it (the fail-low mirror of RFP).
+const RAZOR_MAX_DEPTH: i16 = 2;
+const RAZOR_MARGIN_BASE: i32 = 200;
+const RAZOR_MARGIN_PER_PLY: i32 = 250;
 
 type MoveList = ArrayVec<Move, MAX_MOVES>;
 
@@ -432,6 +437,23 @@ impl SearchCore {
                 } else {
                     0
                 };
+            }
+        }
+
+        if !pv_node
+            && !in_check
+            && depth <= RAZOR_MAX_DEPTH
+            && beta.abs() < MATE_SCORE - MAX_PLY as i32
+        {
+            let eval = *static_eval.get_or_insert_with(|| evaluate(board));
+            if eval + RAZOR_MARGIN_BASE + RAZOR_MARGIN_PER_PLY * i32::from(depth) <= alpha {
+                let score = self.quiescence(board, alpha, alpha + 1, ply);
+                if self.timed_out {
+                    return 0;
+                }
+                if score <= alpha {
+                    return score;
+                }
             }
         }
 
