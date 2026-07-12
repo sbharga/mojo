@@ -41,6 +41,10 @@ const QUEEN_MOBILITY_WEIGHT: i32 = 1;
 // Passed-pawn bonus by rank relative to the pawn's own side (0 = own back rank).
 const MG_PASSER: [i32; 8] = [0, 5, 10, 20, 35, 60, 100, 0];
 const EG_PASSER: [i32; 8] = [0, 10, 20, 40, 70, 120, 200, 0];
+// Endgame-only: reward a passer for the defending king being far away and the
+// attacking king being close, the classic "king escorts / king races" rule.
+const PASSER_OWN_KING_DIST_WEIGHT_EG: i32 = 5;
+const PASSER_ENEMY_KING_DIST_WEIGHT_EG: i32 = 10;
 
 // Compact PeSTO-style piece-square model. Tables are indexed a8..h1.
 #[rustfmt::skip]
@@ -156,6 +160,11 @@ pub(crate) fn evaluate(board: &Board) -> i32 {
                 } as usize;
                 mg += sign * MG_PASSER[relative_rank];
                 eg += sign * EG_PASSER[relative_rank];
+                let own_king_dist = chebyshev_distance(board.king(color), pawn);
+                let enemy_king_dist = chebyshev_distance(board.king(!color), pawn);
+                eg += sign
+                    * (enemy_king_dist * PASSER_ENEMY_KING_DIST_WEIGHT_EG
+                        - own_king_dist * PASSER_OWN_KING_DIST_WEIGHT_EG);
             }
         }
 
