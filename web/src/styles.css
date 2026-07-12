@@ -389,17 +389,10 @@ button.primary {
 .control-grid .reset-game:hover {
   background: #70453a;
 }
-.modal-backdrop {
+.modal {
   position: fixed;
   inset: 0;
-  z-index: 10;
-  display: grid;
-  place-items: center;
-  background: #0009;
-  padding: 16px;
-  overflow-y: auto;
-}
-.modal {
+  margin: auto;
   width: min(680px, 100%);
   max-height: calc(100dvh - 32px);
   overflow-y: auto;
@@ -408,6 +401,9 @@ button.primary {
   border-radius: 10px;
   padding: 16px;
   box-shadow: 0 20px 70px #000;
+}
+.modal::backdrop {
+  background: #0009;
 }
 .modal--settings {
   width: min(420px, 100%);
@@ -553,11 +549,8 @@ textarea {
   select {
     min-height: 44px;
   }
-  .modal-backdrop {
-    place-items: end center;
-    padding: 8px;
-  }
   .modal {
+    margin: auto auto 8px;
     max-height: calc(100dvh - 16px);
     padding: 14px;
   }

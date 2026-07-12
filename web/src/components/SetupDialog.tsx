@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 
 interface Props { title: string; initialValue: string; onClose: () => void; onSubmit: (value: string) => void; submitLabel?: string; readOnly?: boolean }
 
@@ -6,10 +6,10 @@ export function SetupDialog({ title, initialValue, onClose, onSubmit, submitLabe
   const [value, setValue] = useState(initialValue)
   const titleId = useId()
   const fieldId = useId()
+  const dialogRef = useRef<HTMLDialogElement>(null)
   useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
-    window.addEventListener('keydown', closeOnEscape)
-    return () => window.removeEventListener('keydown', closeOnEscape)
-  }, [onClose])
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><form className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} onSubmit={(event) => { event.preventDefault(); onSubmit(value) }}><div className="modal__heading"><h2 id={titleId}>{title}</h2><button type="button" onClick={onClose} aria-label={`Close ${title}`}>×</button></div><label className="sr-only" htmlFor={fieldId}>{title}</label><textarea id={fieldId} value={value} onChange={(event) => setValue(event.target.value)} readOnly={readOnly} autoFocus /><div className="modal__actions">{!readOnly && <button type="button" onClick={onClose}>Cancel</button>}<button className="primary" type="submit">{submitLabel}</button></div></form></div>
+    dialogRef.current?.showModal()
+  }, [])
+  const close = () => dialogRef.current?.close()
+  return <dialog ref={dialogRef} className="modal" aria-labelledby={titleId} onClose={onClose} onClick={(event) => { if (event.target === dialogRef.current) close() }}><form onSubmit={(event) => { event.preventDefault(); onSubmit(value) }}><div className="modal__heading"><h2 id={titleId}>{title}</h2><button type="button" onClick={close} aria-label={`Close ${title}`}>×</button></div><label className="sr-only" htmlFor={fieldId}>{title}</label><textarea id={fieldId} value={value} onChange={(event) => setValue(event.target.value)} readOnly={readOnly} autoFocus /><div className="modal__actions">{!readOnly && <button type="button" onClick={close}>Cancel</button>}<button className="primary" type="submit">{submitLabel}</button></div></form></dialog>
 }

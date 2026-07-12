@@ -24,7 +24,7 @@ function App() {
   const [initialGame] = useState(() => loadGame(localStorage))
   const [initialSettings] = useState(() => loadSettings(localStorage))
   const game = useRef(initialGame)
-  const [fen, setFen] = useState(initialGame.fen())
+  const [fen, setFen] = useState(() => initialGame.fen())
   const [rootFen, setRootFen] = useState(() => rootFenForGame(initialGame, initialFen))
   const [history, setHistory] = useState<Move[]>(() => initialGame.history({ verbose: true }))
   const [mode, setModeState] = useState<EngineMode>(initialSettings.mode)
@@ -38,6 +38,8 @@ function App() {
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
   const boardShell = useRef<HTMLDivElement>(null)
   const [boardWidth, setBoardWidth] = useState(720)
+  const settingsDialogRef = useRef<HTMLDialogElement>(null)
+  const closeSettings = () => settingsDialogRef.current?.close()
   const sync = useCallback(() => {
     const nextHistory = game.current.history({ verbose: true })
     setFen(game.current.fen())
@@ -82,10 +84,7 @@ function App() {
   }, [mode, humanSide, thinkTime, flipped, showBestMove, history, rootFen])
 
   useEffect(() => {
-    if (dialog !== 'settings') return
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setDialog(null) }
-    window.addEventListener('keydown', closeOnEscape)
-    return () => window.removeEventListener('keydown', closeOnEscape)
+    if (dialog === 'settings') settingsDialogRef.current?.showModal()
   }, [dialog])
 
   useEffect(() => {
@@ -166,7 +165,7 @@ function App() {
   // Worker results are already normalized to White's perspective.
   const evalLine = analysis?.lines[0]
 
-  return <main className="app"><header><div className="brand"><span className="brand__mark" aria-hidden="true">♞</span><div><h1>Mojo</h1><p>Browser chess engine</p></div></div><div className="header-actions"><div className="status" role="status" aria-live="polite"><i className={isReady && !error ? 'ready' : ''} aria-hidden="true" />{error ?? (gameOver ? 'Game over' : engineToMove ? 'Mojo is thinking' : `${turn} to move`)}</div><button className="icon-button" onClick={() => setDialog('settings')} title="Settings" aria-label="Settings">⚙</button></div></header><div className="workspace"><div className="board-area"><EvaluationBar scoreCp={evalLine?.score_cp ?? null} mateIn={evalLine?.mate_in ?? null} result={gameResult} /><div className="board-shell" ref={boardShell}><Chessboard id="mojo-board" position={fen} boardOrientation={orientation} onPieceDrop={play} onPieceClick={(_, square) => selectSquare(square as Square)} onPieceDragBegin={(_, square) => selectSquare(square as Square)} onSquareClick={(square) => clickSquare(square as Square)} arePiecesDraggable={humanCanMove} autoPromoteToQueen={false} customArrows={arrows} boardWidth={boardWidth} customDarkSquareStyle={{ backgroundColor: '#779556' }} customLightSquareStyle={{ backgroundColor: '#ebecd0' }} customSquareStyles={legalSquareStyles as never} /></div></div><aside style={{ '--sidebar-height': `${sidebarHeight}px` } as CSSProperties}><AnalysisPanel analysis={analysis} onSelectMove={playAnalysisMove} /><MoveHistory history={history} currentPly={viewPly} onNavigate={navigate} /></aside></div>{dialog === 'settings' && <div className="modal-backdrop" role="presentation" onClick={() => setDialog(null)}><div className="modal modal--settings" role="dialog" aria-modal="true" aria-labelledby="settings-heading" onClick={(event) => event.stopPropagation()}><div className="modal__heading"><h2 id="settings-heading">Settings</h2><button type="button" onClick={() => setDialog(null)} aria-label="Close settings">×</button></div><SettingsPanel mode={mode} humanSide={humanSide} thinkTime={thinkTime} running={running} showBestMove={showBestMove} onMode={setMode} onSide={setHumanSide} onTime={setThinkTime} onToggle={() => setRunning((value) => !value)} onFlip={() => setFlipped((value) => !value)} onShowBestMove={setShowBestMove} onReset={() => { newGame(); setDialog(null) }} onFen={() => setDialog('fen')} onPgn={() => setDialog('pgn')} onExport={() => setDialog('export')} /></div></div>}{(dialog === 'fen' || dialog === 'pgn' || dialog === 'export') && <SetupDialog title={dialog === 'fen' ? 'Load FEN position' : dialog === 'pgn' ? 'Load PGN game' : 'Export PGN'} initialValue={dialog === 'fen' ? fen : game.current.pgn()} onClose={() => setDialog(null)} onSubmit={dialog === 'fen' ? loadFen : dialog === 'pgn' ? loadPgn : () => setDialog(null)} submitLabel={dialog === 'export' ? 'Close' : 'Load'} readOnly={dialog === 'export'} />}</main>
+  return <main className="app"><header><div className="brand"><span className="brand__mark" aria-hidden="true">♞</span><div><h1>Mojo</h1><p>Browser chess engine</p></div></div><div className="header-actions"><div className="status" role="status" aria-live="polite"><i className={isReady && !error ? 'ready' : ''} aria-hidden="true" />{error ?? (gameOver ? 'Game over' : engineToMove ? 'Mojo is thinking' : `${turn} to move`)}</div><button type="button" className="icon-button" onClick={() => setDialog('settings')} title="Settings" aria-label="Settings">⚙</button></div></header><div className="workspace"><div className="board-area"><EvaluationBar scoreCp={evalLine?.score_cp ?? null} mateIn={evalLine?.mate_in ?? null} result={gameResult} /><div className="board-shell" ref={boardShell}><Chessboard id="mojo-board" position={fen} boardOrientation={orientation} onPieceDrop={play} onPieceClick={(_, square) => selectSquare(square as Square)} onPieceDragBegin={(_, square) => selectSquare(square as Square)} onSquareClick={(square) => clickSquare(square as Square)} arePiecesDraggable={humanCanMove} autoPromoteToQueen={false} customArrows={arrows} boardWidth={boardWidth} customDarkSquareStyle={{ backgroundColor: '#779556' }} customLightSquareStyle={{ backgroundColor: '#ebecd0' }} customSquareStyles={legalSquareStyles as never} /></div></div><aside style={{ '--sidebar-height': `${sidebarHeight}px` } as CSSProperties}><AnalysisPanel analysis={analysis} onSelectMove={playAnalysisMove} /><MoveHistory history={history} currentPly={viewPly} onNavigate={navigate} /></aside></div>{dialog === 'settings' && <dialog ref={settingsDialogRef} className="modal modal--settings" aria-labelledby="settings-heading" onClose={() => setDialog(null)} onClick={(event) => { if (event.target === settingsDialogRef.current) closeSettings() }}><div className="modal__heading"><h2 id="settings-heading">Settings</h2><button type="button" onClick={closeSettings} aria-label="Close settings">×</button></div><SettingsPanel mode={mode} humanSide={humanSide} thinkTime={thinkTime} running={running} showBestMove={showBestMove} onMode={setMode} onSide={setHumanSide} onTime={setThinkTime} onToggle={() => setRunning((value) => !value)} onFlip={() => setFlipped((value) => !value)} onShowBestMove={setShowBestMove} onReset={() => { newGame(); closeSettings() }} onFen={() => setDialog('fen')} onPgn={() => setDialog('pgn')} onExport={() => setDialog('export')} /></dialog>}{(dialog === 'fen' || dialog === 'pgn' || dialog === 'export') && <SetupDialog title={dialog === 'fen' ? 'Load FEN position' : dialog === 'pgn' ? 'Load PGN game' : 'Export PGN'} initialValue={dialog === 'fen' ? fen : game.current.pgn()} onClose={() => setDialog(null)} onSubmit={dialog === 'fen' ? loadFen : dialog === 'pgn' ? loadPgn : () => setDialog(null)} submitLabel={dialog === 'export' ? 'Close' : 'Load'} readOnly={dialog === 'export'} />}</main>
 }
 
 export default App
