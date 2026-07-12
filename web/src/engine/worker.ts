@@ -69,6 +69,15 @@ async function analyze(request: AnalyzeRequest) {
       }
       if (result.timed_out) break;
       depth += 1;
+      // Each analyze_depth call is a single synchronous, uninterruptible Wasm
+      // call, so this loop must yield back to the event loop between depths.
+      // Without it, a queued "cancel" for this request (e.g. because the
+      // human just moved) cannot be handled until this search burns its
+      // entire time budget on its own — stacking a stale search's full
+      // budget in front of the next request's. A microtask isn't enough:
+      // queued worker "message" events are macrotasks, so the yield must be
+      // a real macrotask (setTimeout) to let them run first.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
     if (request.purpose === "move" && latest === null) {
       const move = engine.fallback_move();
