@@ -116,6 +116,7 @@ pub(crate) struct SearchCore {
     table: Box<[TTEntry]>,
     killers: [[Option<Move>; 2]; MAX_PLY],
     history: [[i32; 64]; 64],
+    countermove: [[u16; 64]; 64],
     pv: [[u16; MAX_PLY]; MAX_PLY],
     pv_len: [u8; MAX_PLY],
     prior_positions: Vec<u64>,
@@ -138,6 +139,7 @@ impl SearchCore {
             table: vec![TTEntry::default(); TT_ENTRIES].into_boxed_slice(),
             killers: [[None; 2]; MAX_PLY],
             history: [[0; 64]; 64],
+            countermove: [[0; 64]; 64],
             pv: [[0; MAX_PLY]; MAX_PLY],
             pv_len: [0; MAX_PLY],
             prior_positions: Vec::new(),
@@ -166,6 +168,7 @@ impl SearchCore {
                 }
             }
             self.killers = [[None; 2]; MAX_PLY];
+            self.countermove = [[0; 64]; 64];
         }
         self.prior_positions.clear();
         self.prior_positions
@@ -251,7 +254,7 @@ impl SearchCore {
             return None;
         }
         let tt_best = self.probe(key).and_then(|entry| decode_move(entry.best));
-        self.order_moves(board, &mut moves, tt_best, 0);
+        self.order_moves(board, &mut moves, tt_best, None, 0);
         self.pv_len[0] = 0;
         let mut best_score = -INF;
         let mut best_move = None;
@@ -263,12 +266,22 @@ impl SearchCore {
             let child = played(board, mv);
             self.path.push(repetition_key(&child));
             let mut score = if index == 0 {
-                -self.negamax(&child, depth - 1, -beta, -alpha, 1, true, true, 0)
+                -self.negamax(&child, depth - 1, -beta, -alpha, 1, true, true, 0, Some(mv))
             } else {
-                let mut probe =
-                    -self.negamax(&child, depth - 1, -alpha - 1, -alpha, 1, false, true, 0);
+                let mut probe = -self.negamax(
+                    &child,
+                    depth - 1,
+                    -alpha - 1,
+                    -alpha,
+                    1,
+                    false,
+                    true,
+                    0,
+                    Some(mv),
+                );
                 if probe > alpha && probe < beta && !self.timed_out {
-                    probe = -self.negamax(&child, depth - 1, -beta, -alpha, 1, true, true, 0);
+                    probe =
+                        -self.negamax(&child, depth - 1, -beta, -alpha, 1, true, true, 0, Some(mv));
                 }
                 probe
             };
@@ -321,6 +334,7 @@ impl SearchCore {
         pv_node: bool,
         allow_null: bool,
         extensions: u8,
+        prev_move: Option<Move>,
     ) -> i32 {
         self.nodes += 1;
         self.pv_len[ply.min(MAX_PLY - 1)] = 0;
@@ -388,6 +402,7 @@ impl SearchCore {
                 false,
                 false,
                 next_extensions,
+                None,
             );
             self.path.pop();
             self.null_boundary = previous_null_boundary;
@@ -424,7 +439,9 @@ impl SearchCore {
         if moves.is_empty() {
             return terminal_score(board, ply);
         }
-        self.order_moves(board, &mut moves, tt_best, ply);
+        let countermove =
+            prev_move.and_then(|p| decode_move(self.countermove[p.from as usize][p.to as usize]));
+        self.order_moves(board, &mut moves, tt_best, countermove, ply);
         let mut best_score = -INF;
         let mut best_move = None;
 
@@ -469,6 +486,7 @@ impl SearchCore {
                     pv_node,
                     true,
                     next_extensions,
+                    Some(mv),
                 );
             } else {
                 let reduction = lmr_reduction(depth, index, capture, in_check, gives_check);
@@ -481,6 +499,7 @@ impl SearchCore {
                     false,
                     true,
                     next_extensions,
+                    Some(mv),
                 );
                 if reduction > 0 && score > alpha && !self.timed_out {
                     score = -self.negamax(
@@ -492,6 +511,7 @@ impl SearchCore {
                         false,
                         true,
                         next_extensions,
+                        Some(mv),
                     );
                 }
                 if score > alpha && score < beta && !self.timed_out {
@@ -504,6 +524,7 @@ impl SearchCore {
                         true,
                         true,
                         next_extensions,
+                        Some(mv),
                     );
                 }
             }
@@ -519,7 +540,7 @@ impl SearchCore {
             alpha = alpha.max(score);
             if alpha >= beta {
                 if !capture {
-                    self.record_quiet_cutoff(mv, depth, ply);
+                    self.record_quiet_cutoff(mv, depth, ply, prev_move);
                 }
                 break;
             }
@@ -640,13 +661,25 @@ impl SearchCore {
         self.timed_out
     }
 
-    fn order_moves(&self, board: &Board, moves: &mut [Move], tt_best: Option<Move>, ply: usize) {
+    fn order_moves(
+        &self,
+        board: &Board,
+        moves: &mut [Move],
+        tt_best: Option<Move>,
+        countermove: Option<Move>,
+        ply: usize,
+    ) {
         // `sort_unstable_by_key` may evaluate its key function more than once
         // per element. SEE is much more expensive than comparing an integer,
         // so cache every move's ordering score before sorting.
         let mut scored: ArrayVec<(i32, Move), MAX_MOVES> = moves
             .iter()
-            .map(|&mv| (self.move_order_score(board, mv, tt_best, ply), mv))
+            .map(|&mv| {
+                (
+                    self.move_order_score(board, mv, tt_best, countermove, ply),
+                    mv,
+                )
+            })
             .collect();
         scored.sort_unstable_by_key(|&(score, _)| Reverse(score));
         for (slot, (_, mv)) in moves.iter_mut().zip(scored) {
@@ -654,7 +687,14 @@ impl SearchCore {
         }
     }
 
-    fn move_order_score(&self, board: &Board, mv: Move, tt_best: Option<Move>, ply: usize) -> i32 {
+    fn move_order_score(
+        &self,
+        board: &Board,
+        mv: Move,
+        tt_best: Option<Move>,
+        countermove: Option<Move>,
+        ply: usize,
+    ) -> i32 {
         if Some(mv) == tt_best {
             10_000_000
         } else if is_capture(board, mv) {
@@ -663,6 +703,8 @@ impl SearchCore {
             950_000 + mv.promotion.map_or(0, piece_value)
         } else if ply < MAX_PLY && self.killers[ply].contains(&Some(mv)) {
             900_000
+        } else if Some(mv) == countermove {
+            890_000
         } else {
             self.history[mv.from as usize][mv.to as usize]
         }
@@ -708,7 +750,7 @@ impl SearchCore {
         see_values
     }
 
-    fn record_quiet_cutoff(&mut self, mv: Move, depth: i16, ply: usize) {
+    fn record_quiet_cutoff(&mut self, mv: Move, depth: i16, ply: usize, prev_move: Option<Move>) {
         if ply < MAX_PLY {
             if self.killers[ply][0] != Some(mv) {
                 self.killers[ply][1] = self.killers[ply][0];
@@ -717,6 +759,9 @@ impl SearchCore {
             let bonus = i32::from(depth).pow(2).min(2048);
             let value = &mut self.history[mv.from as usize][mv.to as usize];
             *value += bonus - (*value * bonus / 16_384);
+        }
+        if let Some(prev) = prev_move {
+            self.countermove[prev.from as usize][prev.to as usize] = encode_move(mv);
         }
     }
 
@@ -1008,6 +1053,15 @@ mod tests {
     }
 
     #[test]
+    fn countermove_table_populates_after_a_quiet_cutoff() {
+        let board = Board::default();
+        let mut search = SearchCore::new();
+        search.set_position(&board, &[]);
+        search.analyze_depth(&board, 4, 1, 10_000.0);
+        assert!(search.countermove.iter().flatten().any(|&entry| entry != 0));
+    }
+
+    #[test]
     fn store_keeps_deeper_entry_on_same_key_shallow_rewrite() {
         let mut search = SearchCore::new();
         let key = 0x1234_5678_9abc_def0;
@@ -1089,7 +1143,7 @@ mod tests {
         assert!(legal_moves(&board).is_empty());
         assert!(board.checkers().is_empty());
         assert_eq!(
-            search.negamax(&board, 3, -1_001, -1_000, 0, false, true, 0),
+            search.negamax(&board, 3, -1_001, -1_000, 0, false, true, 0, None),
             0
         );
     }
