@@ -296,14 +296,18 @@ mod tests {
         for fen in [
             "8/8/8/8/8/8/8/K6k w - - 0 1",
             "7k/8/8/8/8/8/1N6/K7 w - - 0 1",
-            "7k/8/8/8/8/8/1NN5/K7 w - - 0 1",
             "7k/8/8/8/8/8/1b6/K1B5 w - - 0 1",
+            "k7/8/8/8/8/2B5/3B4/7K w - - 0 1",
         ] {
             assert!(insufficient_material(&fen.parse::<Board>().unwrap()));
         }
         for fen in [
+            // Two knights cannot force mate, but mating positions exist.
+            "7k/5K2/5NN1/8/8/8/8/8 b - - 0 1",
+            // Opposite-colored bishops can obstruct one another's king.
+            "7k/8/8/8/8/8/2b5/K1B5 w - - 0 1",
             "8/8/7k/8/8/8/1BN5/K7 w - - 0 1",
-            "k7/8/8/8/8/2B5/3B4/7K w - - 0 1",
+            "k7/8/8/8/8/2BB4/8/7K w - - 0 1",
         ] {
             assert!(!insufficient_material(&fen.parse::<Board>().unwrap()));
         }

@@ -303,14 +303,16 @@ pub(crate) fn insufficient_material(board: &Board) -> bool {
     if minor_count <= 1 {
         return true;
     }
-    if bishops.is_empty() && minor_count == 2 {
-        return board.colored_pieces(Color::White, Piece::Knight).is_empty()
-            || board.colored_pieces(Color::Black, Piece::Knight).is_empty();
-    }
-    if knights.is_empty() && minor_count == 2 {
-        let white_bishops = board.colored_pieces(Color::White, Piece::Bishop);
-        let black_bishops = board.colored_pieces(Color::Black, Piece::Bishop);
-        return white_bishops.len() == 1 && black_bishops.len() == 1;
+    if knights.is_empty() {
+        // Any number of bishops confined to one square color can never cover
+        // both colors around a king. Opposite-colored bishops are not dead:
+        // one side's bishop can block a flight square for the other side.
+        let mut square_colors = bishops
+            .into_iter()
+            .map(|square| (square.file() as u8 + square.rank() as u8) % 2);
+        if let Some(first) = square_colors.next() {
+            return square_colors.all(|color| color == first);
+        }
     }
     false
 }
