@@ -1,5 +1,6 @@
 use cozy_chess::{
-    Board, Color, File, Piece, Rank, Square, get_bishop_moves, get_knight_moves, get_rook_moves,
+    Board, Color, File, Piece, Rank, Square, get_bishop_moves, get_king_moves, get_knight_moves,
+    get_rook_moves,
 };
 
 // Tapered PeSTO-style piece values (indexed by `Piece as usize`), used only
@@ -38,6 +39,12 @@ const KNIGHT_MOBILITY_WEIGHT: i32 = 4;
 const BISHOP_MOBILITY_WEIGHT: i32 = 4;
 const ROOK_MOBILITY_WEIGHT: i32 = 2;
 const QUEEN_MOBILITY_WEIGHT: i32 = 1;
+// King-zone attacker bonus per square a piece attacks within the enemy king's
+// own square plus its 8 neighbors (tropism), by piece.
+const KING_ZONE_KNIGHT_WEIGHT_MG: i32 = 3;
+const KING_ZONE_BISHOP_WEIGHT_MG: i32 = 3;
+const KING_ZONE_ROOK_WEIGHT_MG: i32 = 2;
+const KING_ZONE_QUEEN_WEIGHT_MG: i32 = 4;
 // Passed-pawn bonus by rank relative to the pawn's own side (0 = own back rank).
 const MG_PASSER: [i32; 8] = [0, 5, 10, 20, 35, 60, 100, 0];
 const EG_PASSER: [i32; 8] = [0, 10, 20, 40, 70, 120, 200, 0];
@@ -79,6 +86,10 @@ pub(crate) fn evaluate(board: &Board) -> i32 {
     let mut eg = 0;
     let mut phase = 0;
     let occupied = board.occupied();
+    let king_zone = [
+        get_king_moves(board.king(Color::White)) | board.king(Color::White).bitboard(),
+        get_king_moves(board.king(Color::Black)) | board.king(Color::Black).bitboard(),
+    ];
 
     for piece in Piece::ALL {
         for color in [Color::White, Color::Black] {
@@ -94,28 +105,37 @@ pub(crate) fn evaluate(board: &Board) -> i32 {
                 phase += PHASE[piece as usize];
 
                 let own = board.colors(color);
-                let mobility = match piece {
-                    Piece::Knight => {
-                        (get_knight_moves(square) & !own).len() as i32 * KNIGHT_MOBILITY_WEIGHT
-                    }
-                    Piece::Bishop => {
-                        (get_bishop_moves(square, occupied) & !own).len() as i32
-                            * BISHOP_MOBILITY_WEIGHT
-                    }
-                    Piece::Rook => {
-                        (get_rook_moves(square, occupied) & !own).len() as i32
-                            * ROOK_MOBILITY_WEIGHT
-                    }
+                let raw_attacks = match piece {
+                    Piece::Knight => Some(get_knight_moves(square)),
+                    Piece::Bishop => Some(get_bishop_moves(square, occupied)),
+                    Piece::Rook => Some(get_rook_moves(square, occupied)),
                     Piece::Queen => {
-                        ((get_bishop_moves(square, occupied) | get_rook_moves(square, occupied))
-                            & !own)
-                            .len() as i32
-                            * QUEEN_MOBILITY_WEIGHT
+                        Some(get_bishop_moves(square, occupied) | get_rook_moves(square, occupied))
                     }
-                    _ => 0,
+                    _ => None,
                 };
-                mg += sign * mobility;
-                eg += sign * mobility;
+                if let Some(raw_attacks) = raw_attacks {
+                    let mobility_weight = match piece {
+                        Piece::Knight => KNIGHT_MOBILITY_WEIGHT,
+                        Piece::Bishop => BISHOP_MOBILITY_WEIGHT,
+                        Piece::Rook => ROOK_MOBILITY_WEIGHT,
+                        Piece::Queen => QUEEN_MOBILITY_WEIGHT,
+                        _ => 0,
+                    };
+                    let mobility = (raw_attacks & !own).len() as i32 * mobility_weight;
+                    mg += sign * mobility;
+                    eg += sign * mobility;
+
+                    let king_zone_weight = match piece {
+                        Piece::Knight => KING_ZONE_KNIGHT_WEIGHT_MG,
+                        Piece::Bishop => KING_ZONE_BISHOP_WEIGHT_MG,
+                        Piece::Rook => KING_ZONE_ROOK_WEIGHT_MG,
+                        Piece::Queen => KING_ZONE_QUEEN_WEIGHT_MG,
+                        _ => 0,
+                    };
+                    let zone_hits = (raw_attacks & king_zone[!color as usize]).len() as i32;
+                    mg += sign * zone_hits * king_zone_weight;
+                }
             }
         }
     }
