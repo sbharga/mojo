@@ -35,11 +35,9 @@ describe('SetupDialog', () => {
   it('closes when the backdrop itself is pressed', async () => {
     const user = userEvent.setup()
     const close = vi.fn()
-    const { container } = render(<SetupDialog title="Load PGN game" initialValue="" onClose={close} onSubmit={vi.fn()} />)
+    render(<SetupDialog title="Load PGN game" initialValue="" onClose={close} onSubmit={vi.fn()} />)
 
-    const backdrop = container.querySelector('.modal-backdrop')
-    expect(backdrop).not.toBeNull()
-    await user.click(backdrop!)
+    await user.click(screen.getByRole('dialog', { name: 'Load PGN game' }))
     expect(close).toHaveBeenCalledOnce()
   })
 })

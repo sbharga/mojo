@@ -21,7 +21,9 @@ export function useEngine(onMove: (uci: string) => void) {
     analysis: null,
   });
   const request = useRef(0);
-  const cache = useRef(new AnalysisCache());
+  const cache = useRef<AnalysisCache | null>(null);
+  if (cache.current === null) cache.current = new AnalysisCache();
+  const analysisCache = cache.current;
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [readyWorkers, setReadyWorkers] = useState<Set<Purpose>>(new Set());
   const [error, setError] = useState<string | null>(null);
@@ -48,9 +50,9 @@ export function useEngine(onMove: (uci: string) => void) {
         // Cache every valid result we see, even from a superseded request —
         // it's still a correct, reusable result for its own (older) fen.
         if (message.type === "analysis")
-          cache.current.set(message.analysis.root_fen, message.analysis);
+          analysisCache.set(message.analysis.root_fen, message.analysis);
         if (message.type === "complete" && message.analysis)
-          cache.current.set(message.analysis.root_fen, message.analysis);
+          analysisCache.set(message.analysis.root_fen, message.analysis);
         if (
           message.type === "analysis" &&
           message.requestId === request.current
@@ -70,7 +72,7 @@ export function useEngine(onMove: (uci: string) => void) {
       return instance;
     });
     return () => instances.forEach((instance) => instance.terminate());
-  }, [onMove]);
+  }, [analysisCache, onMove]);
 
   const start = useCallback(
     (
@@ -92,7 +94,7 @@ export function useEngine(onMove: (uci: string) => void) {
       // A fen already fully analyzed (history navigation, or pause/resume
       // landing back on the same position) doesn't need to be re-searched
       // from depth 1 by the other worker.
-      const cached = cache.current.get(fen, purpose === "move" ? 1 : 3);
+      const cached = analysisCache.get(fen, purpose === "move" ? 1 : 3);
       if (cached) {
         setAnalysis(cached);
         if (purpose === "move" && cached.lines[0]?.moves[0])
@@ -109,7 +111,7 @@ export function useEngine(onMove: (uci: string) => void) {
         purpose,
       });
     },
-    [onMove],
+    [analysisCache, onMove],
   );
 
   const cancel = useCallback(() => {
