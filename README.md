@@ -4,6 +4,10 @@ Mojo is a fast, browser-native chess engine and analysis board. The Rust engine
 compiles to WebAssembly and runs in a Web Worker, so analysis never blocks the
 React UI and no chess positions leave the browser.
 
+Alongside games against Mojo, the browser app can play against a locally
+bundled Stockfish 18 Lite opponent with configurable target Elo and move time,
+or run Mojo-versus-Stockfish games. Mojo continues to power the analysis panel.
+
 ## Requirements
 
 - Rust stable with `wasm32-unknown-unknown` (`rustup target add wasm32-unknown-unknown`)
@@ -68,6 +72,8 @@ candidate must share the current generated JS ABI.
   worker protocol.
 - `web/src/engine/worker.ts` owns one engine instance and cancels stale
   analysis by request id.
+- Stockfish Lite runs as a separate UCI worker only in Stockfish game modes;
+  its GPLv3 attribution and source information are in `THIRD_PARTY_NOTICES.md`.
 
 Mojo is standard chess only in this release. It supports FEN and main-line PGN
 import/export, local human games, and engine games. The current game and UI

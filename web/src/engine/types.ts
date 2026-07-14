@@ -1,4 +1,9 @@
-export type EngineMode = "human-engine" | "engine-engine" | "human-human";
+export type EngineMode =
+  | "human-engine"
+  | "human-stockfish"
+  | "engine-engine"
+  | "mojo-stockfish"
+  | "human-human";
 export type Side = "white" | "black";
 
 export interface AnalysisLine {

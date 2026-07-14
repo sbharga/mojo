@@ -15,13 +15,25 @@ describe('session persistence', () => {
     const storage = memoryStorage({
       'mojo-settings': JSON.stringify({ mode: 'invalid', humanSide: 'black', thinkTime: 99_000, flipped: true, showBestMove: false }),
     })
-    expect(loadSettings(storage)).toEqual({ mode: 'human-engine', humanSide: 'black', thinkTime: 10_000, flipped: true, showBestMove: false })
+    expect(loadSettings(storage)).toEqual({ mode: 'human-engine', humanSide: 'black', thinkTime: 10_000, stockfishElo: 2000, stockfishThinkTime: 500, stockfishSide: 'black', flipped: true, showBestMove: false })
     expect(loadSettings(memoryStorage({ 'mojo-settings': '{bad json' })).mode).toBe('human-engine')
   })
 
   it('shows best-move arrows by default for existing saved settings', () => {
     const settings = loadSettings(memoryStorage({ 'mojo-settings': JSON.stringify({ flipped: true }) }))
     expect(settings.showBestMove).toBe(true)
+  })
+
+  it('validates and migrates Stockfish settings', () => {
+    const settings = loadSettings(memoryStorage({
+      'mojo-settings': JSON.stringify({ mode: 'mojo-stockfish', stockfishElo: 9000, stockfishThinkTime: 20, stockfishSide: 'white' }),
+    }))
+    expect(settings).toMatchObject({
+      mode: 'mojo-stockfish',
+      stockfishElo: 3190,
+      stockfishThinkTime: 100,
+      stockfishSide: 'white',
+    })
   })
 
   it('round-trips a game with a non-standard starting position', () => {
@@ -44,6 +56,7 @@ describe('board orientation', () => {
   it('uses the selected side only in human-versus-engine mode', () => {
     expect(boardOrientation('human-engine', 'black', false)).toBe('black')
     expect(boardOrientation('human-engine', 'black', true)).toBe('white')
+    expect(boardOrientation('human-stockfish', 'black', false)).toBe('black')
     expect(boardOrientation('human-human', 'black', false)).toBe('white')
     expect(boardOrientation('human-human', 'black', true)).toBe('black')
   })

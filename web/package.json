@@ -4,6 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "prepare:stockfish": "node scripts/prepare-stockfish.mjs",
+    "predev": "npm run prepare:stockfish",
+    "prebuild": "npm run prepare:stockfish",
     "build:engine": "cd ../engine && wasm-pack build --target web --out-dir pkg --release",
     "bench:engine": "npm run build:engine && node ../engine/bench.mjs",
     "selfplay": "node ../engine/selfplay.mjs",
@@ -20,7 +23,8 @@
     "chess.js": "^1.4.0",
     "react": "^19.1.0",
     "react-chessboard": "^4.7.1",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "stockfish": "18.0.8"
   },
   "devDependencies": {
     "@eslint/js": "^9.24.0",
