@@ -355,6 +355,18 @@ input[type="range"] {
   color: #d8d7d2;
   cursor: pointer;
 }
+.stockfish-settings {
+  margin-top: 12px;
+  padding: 0 12px 10px;
+  border: 1px solid #45433d;
+  border-radius: 7px;
+  background: #292824;
+}
+.setting-note {
+  margin: 9px 0 0;
+  color: #85847e;
+  font-size: 11px;
+}
 .toggle-control input {
   width: 20px;
   height: 20px;

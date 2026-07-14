@@ -6,6 +6,8 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
 
+const stockfishMock = vi.hoisted(() => ({ start: vi.fn(), cancel: vi.fn() }))
+
 vi.mock('react-chessboard', () => ({
   Chessboard: ({ position, onPieceDrop }: { position: string; onPieceDrop: (from: string, to: string) => boolean }) => <div data-testid="chessboard" data-position={position}><button onClick={() => onPieceDrop('c7', 'c5')}>Play c5</button></div>,
 }))
@@ -20,6 +22,16 @@ vi.mock('./engine/useEngine', () => ({
   }),
 }))
 
+vi.mock('./engine/useStockfish', () => ({
+  useStockfish: () => ({
+    isReady: true,
+    isThinking: false,
+    error: null,
+    start: stockfishMock.start,
+    cancel: stockfishMock.cancel,
+  }),
+}))
+
 class ResizeObserverStub {
   observe() {}
   disconnect() {}
@@ -27,6 +39,8 @@ class ResizeObserverStub {
 
 beforeEach(() => {
   localStorage.clear()
+  stockfishMock.start.mockClear()
+  stockfishMock.cancel.mockClear()
   vi.stubGlobal('ResizeObserver', ResizeObserverStub)
 })
 
@@ -88,5 +102,41 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: 'Reset game' }))
     expect(screen.getByTestId('chessboard').getAttribute('data-position')).toBe(new Chess().fen())
     expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull()
+  })
+
+  it('shows configurable Stockfish controls for supported matchups', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    await user.selectOptions(screen.getByLabelText('Mode'), 'human-stockfish')
+    expect(screen.getByLabelText('Your color')).toBeTruthy()
+    expect(screen.getByLabelText(/Stockfish target Elo/)).toHaveProperty('value', '2000')
+    expect(screen.getByLabelText(/Stockfish time/)).toHaveProperty('value', '500')
+
+    await user.selectOptions(screen.getByLabelText('Mode'), 'mojo-stockfish')
+    expect(screen.getByLabelText('Stockfish color')).toHaveProperty('value', 'black')
+    expect(screen.getByRole('button', { name: 'Start game' })).toBeTruthy()
+  })
+
+  it('starts Stockfish with persisted strength, time, and game history', () => {
+    const game = new Chess()
+    game.move('e4')
+    localStorage.setItem('mojo-game', game.pgn())
+    localStorage.setItem('mojo-settings', JSON.stringify({
+      mode: 'human-stockfish',
+      humanSide: 'white',
+      stockfishElo: 2250,
+      stockfishThinkTime: 900,
+    }))
+
+    render(<App />)
+
+    expect(stockfishMock.start).toHaveBeenCalledWith({
+      rootFen: new Chess().fen(),
+      moves: ['e2e4'],
+      elo: 2250,
+      thinkTimeMs: 900,
+    })
   })
 })
