@@ -1,18 +1,28 @@
-use std::cmp::Reverse;
+//! Iterative-deepening alpha-beta search core: negamax/quiescence, the
+//! transposition table lifecycle, and the search-tuning constants that
+//! govern pruning/reduction. Move ordering lives in [`ordering`], SEE in
+//! [`see`], and generic move/position utilities in [`moves`].
+
+mod moves;
+mod ordering;
+mod see;
+mod tt;
 
 use arrayvec::ArrayVec;
-use cozy_chess::{
-    BitBoard, Board, Color, Move, Piece, Rank, Square, get_bishop_moves, get_king_moves,
-    get_knight_moves, get_pawn_attacks, get_rook_moves,
-};
+use cozy_chess::{Board, Color, Move, Piece};
 
-use crate::eval::{evaluate, insufficient_material, piece_value};
+use crate::eval::{evaluate, insufficient_material};
+
+pub(crate) use moves::{fallback, legal_moves, played};
+
+use moves::{captured_value, decode_move, encode_move, is_capture, repetition_key, rule_key};
+use see::static_exchange;
+use tt::{Bound, TT_ENTRIES, TTEntry, score_from_tt, score_to_tt};
 
 pub(crate) const MATE_SCORE: i32 = 30_000;
 pub(crate) const INF: i32 = 32_000;
 pub(crate) const MAX_PLY: usize = 64;
 const MAX_MOVES: usize = 218;
-const TT_ENTRIES: usize = 1 << 17;
 const TIME_CHECK_INTERVAL: u64 = 256;
 
 // --- Search tuning constants (values intentionally unchanged during
@@ -68,41 +78,6 @@ const RAZOR_MARGIN_BASE: i32 = 200;
 const RAZOR_MARGIN_PER_PLY: i32 = 250;
 
 type MoveList = ArrayVec<Move, MAX_MOVES>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-enum Bound {
-    Empty,
-    Exact,
-    Lower,
-    Upper,
-}
-
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-struct TTEntry {
-    key: u64,
-    best: u16,
-    score: i16,
-    depth: i8,
-    bound: Bound,
-    generation: u8,
-    padding: u8,
-}
-
-impl Default for TTEntry {
-    fn default() -> Self {
-        Self {
-            key: 0,
-            best: 0,
-            score: 0,
-            depth: -1,
-            bound: Bound::Empty,
-            generation: 0,
-            padding: 0,
-        }
-    }
-}
 
 #[derive(Debug)]
 pub(crate) struct SearchLine {
@@ -683,110 +658,6 @@ impl SearchCore {
         self.timed_out
     }
 
-    fn order_moves(
-        &self,
-        board: &Board,
-        moves: &mut [Move],
-        tt_best: Option<Move>,
-        countermove: Option<Move>,
-        ply: usize,
-    ) {
-        // `sort_unstable_by_key` may evaluate its key function more than once
-        // per element. SEE is much more expensive than comparing an integer,
-        // so cache every move's ordering score before sorting.
-        let mut scored: ArrayVec<(i32, Move), MAX_MOVES> = moves
-            .iter()
-            .map(|&mv| {
-                (
-                    self.move_order_score(board, mv, tt_best, countermove, ply),
-                    mv,
-                )
-            })
-            .collect();
-        scored.sort_unstable_by_key(|&(score, _)| Reverse(score));
-        for (slot, (_, mv)) in moves.iter_mut().zip(scored) {
-            *slot = mv;
-        }
-    }
-
-    fn move_order_score(
-        &self,
-        board: &Board,
-        mv: Move,
-        tt_best: Option<Move>,
-        countermove: Option<Move>,
-        ply: usize,
-    ) -> i32 {
-        if Some(mv) == tt_best {
-            10_000_000
-        } else if is_capture(board, mv) {
-            1_000_000 + static_exchange(board, mv) * 32 + captured_value(board, mv)
-        } else if mv.promotion.is_some() {
-            950_000 + mv.promotion.map_or(0, piece_value)
-        } else if ply < MAX_PLY && self.killers[ply].contains(&Some(mv)) {
-            900_000
-        } else if Some(mv) == countermove {
-            890_000
-        } else {
-            self.history[mv.from as usize][mv.to as usize]
-        }
-    }
-
-    /// Like `order_moves`, but for the tactical-only move list used in
-    /// `quiescence`: it also returns each move's SEE value (meaningful only
-    /// for captures) so the caller doesn't need to recompute
-    /// `static_exchange` a second time for its own pruning decisions.
-    fn order_quiescence_moves(
-        &self,
-        board: &Board,
-        moves: &mut MoveList,
-        ply: usize,
-    ) -> ArrayVec<i32, MAX_MOVES> {
-        let mut scored: ArrayVec<(i32, i32, Move), MAX_MOVES> = moves
-            .iter()
-            .map(|&mv| {
-                let see = if is_capture(board, mv) {
-                    static_exchange(board, mv)
-                } else {
-                    0
-                };
-                let sort_score = if is_capture(board, mv) {
-                    1_000_000 + see * 32 + captured_value(board, mv)
-                } else if mv.promotion.is_some() {
-                    950_000 + mv.promotion.map_or(0, piece_value)
-                } else if ply < MAX_PLY && self.killers[ply].contains(&Some(mv)) {
-                    900_000
-                } else {
-                    self.history[mv.from as usize][mv.to as usize]
-                };
-                (sort_score, see, mv)
-            })
-            .collect();
-        scored.sort_unstable_by_key(|&(score, ..)| Reverse(score));
-        moves.clear();
-        let mut see_values = ArrayVec::new();
-        for (_, see, mv) in scored {
-            moves.push(mv);
-            see_values.push(see);
-        }
-        see_values
-    }
-
-    fn record_quiet_cutoff(&mut self, mv: Move, depth: i16, ply: usize, prev_move: Option<Move>) {
-        if ply < MAX_PLY {
-            if self.killers[ply][0] != Some(mv) {
-                self.killers[ply][1] = self.killers[ply][0];
-                self.killers[ply][0] = Some(mv);
-            }
-            let bonus = i32::from(depth).pow(2).min(2048);
-            let value = &mut self.history[mv.from as usize][mv.to as usize];
-            *value += bonus - (*value * bonus / 16_384);
-        }
-        if let Some(prev) = prev_move {
-            self.countermove[prev.from as usize][prev.to as usize] = encode_move(mv);
-        }
-    }
-
     fn update_pv(&mut self, ply: usize, mv: Move) {
         if ply >= MAX_PLY - 1 {
             return;
@@ -835,68 +706,12 @@ impl SearchCore {
     }
 }
 
-pub(crate) fn legal_moves(board: &Board) -> MoveList {
-    let mut moves = MoveList::new();
-    board.generate_moves(|piece_moves| {
-        moves.extend(piece_moves);
-        false
-    });
-    moves
-}
-
-pub(crate) fn played(board: &Board, mv: Move) -> Board {
-    let mut next = board.clone();
-    next.play(mv);
-    next
-}
-
-pub(crate) fn fallback(board: &Board) -> Option<Move> {
-    let mut scored: ArrayVec<(i32, Move), MAX_MOVES> = legal_moves(board)
-        .into_iter()
-        .map(|mv| {
-            let child = played(board, mv);
-            let score = if child.halfmove_clock() >= 100 || insufficient_material(&child) {
-                0
-            } else if legal_moves(&child).is_empty() {
-                if child.checkers().is_empty() {
-                    0
-                } else {
-                    -MATE_SCORE
-                }
-            } else {
-                evaluate(&child)
-            };
-            (score, mv)
-        })
-        .collect();
-    scored.sort_unstable_by_key(|&(score, _)| score);
-    scored.first().map(|&(_, mv)| mv)
-}
-
 fn terminal_score(board: &Board, ply: usize) -> i32 {
     if board.checkers().is_empty() {
         0
     } else {
         -MATE_SCORE + ply as i32
     }
-}
-
-fn is_capture(board: &Board, mv: Move) -> bool {
-    board.piece_on(mv.to).is_some()
-        || (board.piece_on(mv.from) == Some(Piece::Pawn) && mv.from.file() != mv.to.file())
-}
-
-fn captured_value(board: &Board, mv: Move) -> i32 {
-    board.piece_on(mv.to).map_or_else(
-        || {
-            if is_capture(board, mv) {
-                piece_value(Piece::Pawn)
-            } else {
-                0
-            }
-        },
-        piece_value,
-    )
 }
 
 fn lmr_reduction(
@@ -924,185 +739,11 @@ fn has_non_pawn_material(board: &Board, color: Color) -> bool {
     .is_empty()
 }
 
-fn repetition_key(board: &Board) -> u64 {
-    let Some(ep_file) = board.en_passant() else {
-        return board.hash_without_ep();
-    };
-    let side = board.side_to_move();
-    let ep_square = Square::new(ep_file, Rank::Third.relative_to(!side));
-    let candidates = get_pawn_attacks(ep_square, !side) & board.colored_pieces(side, Piece::Pawn);
-    let legal_ep = candidates.into_iter().any(|from| {
-        board.is_legal(Move {
-            from,
-            to: ep_square,
-            promotion: None,
-        })
-    });
-    if legal_ep {
-        board.hash()
-    } else {
-        board.hash_without_ep()
-    }
-}
-
-fn rule_key(board: &Board) -> u64 {
-    repetition_key(board) ^ u64::from(board.halfmove_clock()).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-}
-
-fn score_to_tt(score: i32, ply: usize) -> i32 {
-    if score >= MATE_SCORE - MAX_PLY as i32 {
-        score + ply as i32
-    } else if score <= -MATE_SCORE + MAX_PLY as i32 {
-        score - ply as i32
-    } else {
-        score
-    }
-}
-
-fn score_from_tt(score: i32, ply: usize) -> i32 {
-    if score >= MATE_SCORE - MAX_PLY as i32 {
-        score - ply as i32
-    } else if score <= -MATE_SCORE + MAX_PLY as i32 {
-        score + ply as i32
-    } else {
-        score
-    }
-}
-
-fn encode_move(mv: Move) -> u16 {
-    let promotion = match mv.promotion {
-        None => 0,
-        Some(Piece::Knight) => 1,
-        Some(Piece::Bishop) => 2,
-        Some(Piece::Rook) => 3,
-        Some(Piece::Queen) => 4,
-        Some(Piece::Pawn | Piece::King) => 0,
-    };
-    (mv.from as u16) | ((mv.to as u16) << 6) | (promotion << 12)
-}
-
-fn decode_move(encoded: u16) -> Option<Move> {
-    if encoded == 0 {
-        return None;
-    }
-    let value = encoded;
-    let promotion = match (value >> 12) & 0x7 {
-        0 => None,
-        1 => Some(Piece::Knight),
-        2 => Some(Piece::Bishop),
-        3 => Some(Piece::Rook),
-        4 => Some(Piece::Queen),
-        _ => return None,
-    };
-    Some(Move {
-        from: Square::ALL[usize::from(value & 0x3f)],
-        to: Square::ALL[usize::from((value >> 6) & 0x3f)],
-        promotion,
-    })
-}
-
-fn attackers_to(board: &Board, target: Square, color: Color, occupied: BitBoard) -> BitBoard {
-    let pieces = board.colors(color) & occupied;
-    (get_pawn_attacks(target, !color) & pieces & board.pieces(Piece::Pawn))
-        | (get_knight_moves(target) & pieces & board.pieces(Piece::Knight))
-        | (get_king_moves(target) & pieces & board.pieces(Piece::King))
-        | (get_bishop_moves(target, occupied)
-            & pieces
-            & (board.pieces(Piece::Bishop) | board.pieces(Piece::Queen)))
-        | (get_rook_moves(target, occupied)
-            & pieces
-            & (board.pieces(Piece::Rook) | board.pieces(Piece::Queen)))
-}
-
-fn static_exchange(board: &Board, mv: Move) -> i32 {
-    if !is_capture(board, mv) {
-        return 0;
-    }
-    let mut gains = [0_i32; 32];
-    gains[0] = captured_value(board, mv)
-        + mv.promotion
-            .map_or(0, |piece| piece_value(piece) - piece_value(Piece::Pawn));
-    let mut occupied = board.occupied() & !mv.from.bitboard();
-    if board.piece_on(mv.to).is_none() {
-        let captured = Square::new(mv.to.file(), mv.from.rank());
-        occupied &= !captured.bitboard();
-    }
-    occupied |= mv.to.bitboard();
-    let mut side = !board.side_to_move();
-    let mut target_piece = mv
-        .promotion
-        .unwrap_or_else(|| board.piece_on(mv.from).unwrap_or(Piece::Pawn));
-    let mut depth = 0;
-
-    while depth + 1 < gains.len() {
-        let attackers = attackers_to(board, mv.to, side, occupied);
-        let Some((piece, from)) = Piece::ALL.into_iter().find_map(|piece| {
-            (attackers & board.pieces(piece))
-                .into_iter()
-                .next()
-                .map(|square| (piece, square))
-        }) else {
-            break;
-        };
-        depth += 1;
-        gains[depth] = piece_value(target_piece) - gains[depth - 1];
-        target_piece = piece;
-        occupied &= !from.bitboard();
-        side = !side;
-    }
-    while depth > 0 {
-        gains[depth - 1] = -(-gains[depth - 1]).max(gains[depth]);
-        depth -= 1;
-    }
-    gains[0]
-}
-
 #[cfg(test)]
 mod tests {
+    use cozy_chess::Board;
+
     use super::*;
-
-    #[test]
-    fn move_encoding_round_trips() {
-        for text in ["e2e4", "e7e8q", "e1h1"] {
-            let mv = text.parse::<Move>().unwrap();
-            assert_eq!(decode_move(encode_move(mv)), Some(mv));
-        }
-    }
-
-    #[test]
-    fn tt_entry_stays_compact() {
-        assert_eq!(std::mem::size_of::<TTEntry>(), 16);
-    }
-
-    #[test]
-    fn countermove_table_populates_after_a_quiet_cutoff() {
-        let board = Board::default();
-        let mut search = SearchCore::new();
-        search.set_position(&board, &[]);
-        search.analyze_depth(&board, 4, 1, 10_000.0);
-        assert!(search.countermove.iter().flatten().any(|&entry| entry != 0));
-    }
-
-    #[test]
-    fn store_keeps_deeper_entry_on_same_key_shallow_rewrite() {
-        let mut search = SearchCore::new();
-        let key = 0x1234_5678_9abc_def0;
-        let mv = "e2e4".parse::<Move>().unwrap();
-        search.store(key, 10, 0, Bound::Exact, mv);
-        search.store(key, 2, 0, Bound::Exact, mv);
-        assert_eq!(search.probe(key).unwrap().depth, 10);
-    }
-
-    #[test]
-    fn static_exchange_distinguishes_winning_and_losing_captures() {
-        let winning = "7k/3q4/8/8/8/8/3R4/7K w - - 0 1".parse::<Board>().unwrap();
-        assert!(static_exchange(&winning, "d2d7".parse().unwrap()) > 0);
-
-        let losing = "3q3k/3p4/8/8/8/8/8/3Q3K w - - 0 1"
-            .parse::<Board>()
-            .unwrap();
-        assert!(static_exchange(&losing, "d1d7".parse().unwrap()) < 0);
-    }
 
     #[test]
     fn root_table_entry_tracks_the_primary_multipv_line() {
@@ -1143,15 +784,6 @@ mod tests {
         let alpha = 400;
 
         assert!(search.quiescence(&board, alpha, 1_000, 0) > alpha);
-    }
-
-    #[test]
-    fn fallback_prefers_immediate_checkmate() {
-        let board = "7k/5Q2/6K1/8/8/8/8/8 w - - 0 1".parse::<Board>().unwrap();
-        let child = played(&board, fallback(&board).unwrap());
-
-        assert!(legal_moves(&child).is_empty());
-        assert!(!child.checkers().is_empty());
     }
 
     #[test]
