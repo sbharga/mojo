@@ -50,8 +50,9 @@ const NULL_MOVE_MIN_DEPTH: i16 = 3;
 /// with a deeper reduction once both a higher depth and move index are hit.
 const LMR_MIN_DEPTH: i16 = 3;
 const LMR_MIN_MOVE_INDEX: usize = 3;
-const LMR_DEEP_DEPTH: i16 = 6;
-const LMR_DEEP_MOVE_INDEX: usize = 8;
+const LMR_TABLE_DEPTHS: usize = 32;
+const LMR_TABLE_MOVES: usize = 64;
+const LMR_TABLE: [[u8; LMR_TABLE_MOVES]; LMR_TABLE_DEPTHS] = build_lmr_table();
 /// Continuation/main-history thresholds for pruning and LMR adjustments.
 const HISTORY_PRUNE_MAX_DEPTH: i16 = 3;
 const HISTORY_PRUNE_MIN_MOVE_INDEX: usize = 4;
@@ -98,6 +99,17 @@ enum SingularOutcome {
     MultiCut,
     Reduce,
     None,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct LmrContext {
+    capture: bool,
+    in_check: bool,
+    gives_check: bool,
+    history_score: i32,
+    pv_node: bool,
+    cut_node: bool,
+    tt_move_capture: bool,
 }
 
 #[derive(Debug)]
@@ -563,6 +575,8 @@ impl SearchCore {
 
         let countermove =
             prev_move.and_then(|p| decode_move(self.countermove[p.from as usize][p.to as usize]));
+        let cut_node = !pv_node && beta == alpha + 1;
+        let tt_move_capture = tt_best.is_some_and(|mv| is_capture(board, mv));
         let mut picker = MovePicker::new(
             board,
             tt_best,
@@ -651,10 +665,15 @@ impl SearchCore {
                 let reduction = lmr_reduction(
                     depth,
                     move_index,
-                    capture,
-                    in_check,
-                    gives_check,
-                    quiet_history,
+                    LmrContext {
+                        capture,
+                        in_check,
+                        gives_check,
+                        history_score: quiet_history,
+                        pv_node,
+                        cut_node,
+                        tt_move_capture,
+                    },
                 );
                 score = -self.negamax(
                     &child,
@@ -994,30 +1013,51 @@ fn terminal_score(board: &Board, ply: usize) -> i32 {
     }
 }
 
-fn lmr_reduction(
-    depth: i16,
-    index: usize,
-    capture: bool,
-    in_check: bool,
-    gives_check: bool,
-    history_score: i32,
-) -> i16 {
-    if depth < LMR_MIN_DEPTH || index < LMR_MIN_MOVE_INDEX || capture || in_check || gives_check {
+fn lmr_reduction(depth: i16, index: usize, context: LmrContext) -> i16 {
+    if depth < LMR_MIN_DEPTH || index < LMR_MIN_MOVE_INDEX || context.capture || context.in_check {
         return 0;
     }
-    let base = if depth >= LMR_DEEP_DEPTH && index >= LMR_DEEP_MOVE_INDEX {
-        2
-    } else {
-        1
-    };
-    let adjusted = if history_score >= HISTORY_GOOD {
-        base - 1
-    } else if history_score <= HISTORY_BAD {
-        base + 1
-    } else {
-        base
-    };
-    adjusted.clamp(0, depth - 1)
+    let depth_index = usize::from(depth as u16).min(LMR_TABLE_DEPTHS - 1);
+    let move_index = index.min(LMR_TABLE_MOVES - 1);
+    let mut reduction = i16::from(LMR_TABLE[depth_index][move_index]);
+    reduction -= i16::from(context.pv_node);
+    reduction += i16::from(context.cut_node);
+    reduction -= i16::from(context.gives_check);
+    reduction += i16::from(context.tt_move_capture);
+    reduction += i16::from(context.history_score <= HISTORY_BAD);
+    reduction -= i16::from(context.history_score >= HISTORY_GOOD);
+    reduction.clamp(0, depth - 1)
+}
+
+const fn build_lmr_table() -> [[u8; LMR_TABLE_MOVES]; LMR_TABLE_DEPTHS] {
+    let mut table = [[0; LMR_TABLE_MOVES]; LMR_TABLE_DEPTHS];
+    let mut depth = 1;
+    while depth < LMR_TABLE_DEPTHS {
+        let mut move_index = 1;
+        while move_index < LMR_TABLE_MOVES {
+            let product = log_scaled(depth) * log_scaled(move_index + 1);
+            table[depth][move_index] = ((product + 18_022) / 36_045) as u8;
+            move_index += 1;
+        }
+        depth += 1;
+    }
+    table
+}
+
+/// Fixed-point natural-log approximation, scaled by 128. Linear interpolation
+/// within each power-of-two interval is sufficient for a reduction table.
+const fn log_scaled(value: usize) -> usize {
+    if value <= 1 {
+        return 0;
+    }
+    let mut exponent = 0;
+    let mut base = 1;
+    while base * 2 <= value {
+        base *= 2;
+        exponent += 1;
+    }
+    let log2_scaled = exponent * 128 + (value - base) * 128 / base;
+    log2_scaled * 89 / 128
 }
 
 fn history_prunable(depth: i16, move_index: usize, history_score: i32) -> bool {
@@ -1114,9 +1154,75 @@ mod tests {
 
     #[test]
     fn continuation_history_adjusts_lmr_and_shallow_pruning() {
-        assert_eq!(lmr_reduction(6, 8, false, false, false, 0), 2);
-        assert_eq!(lmr_reduction(6, 8, false, false, false, HISTORY_GOOD), 1);
-        assert_eq!(lmr_reduction(6, 8, false, false, false, HISTORY_BAD), 3);
+        assert_eq!(std::mem::size_of_val(&LMR_TABLE), 2 * 1024);
+        let neutral = LmrContext::default();
+        assert_eq!(lmr_reduction(6, 8, neutral), 2);
+        assert_eq!(
+            lmr_reduction(
+                6,
+                8,
+                LmrContext {
+                    history_score: HISTORY_GOOD,
+                    ..neutral
+                }
+            ),
+            1
+        );
+        assert_eq!(
+            lmr_reduction(
+                6,
+                8,
+                LmrContext {
+                    history_score: HISTORY_BAD,
+                    ..neutral
+                }
+            ),
+            3
+        );
+        assert_eq!(
+            lmr_reduction(
+                6,
+                8,
+                LmrContext {
+                    pv_node: true,
+                    ..neutral
+                }
+            ),
+            1
+        );
+        assert_eq!(
+            lmr_reduction(
+                6,
+                8,
+                LmrContext {
+                    cut_node: true,
+                    ..neutral
+                }
+            ),
+            3
+        );
+        assert_eq!(
+            lmr_reduction(
+                6,
+                8,
+                LmrContext {
+                    gives_check: true,
+                    ..neutral
+                }
+            ),
+            1
+        );
+        assert_eq!(
+            lmr_reduction(
+                6,
+                8,
+                LmrContext {
+                    tt_move_capture: true,
+                    ..neutral
+                }
+            ),
+            3
+        );
         assert!(history_prunable(3, 4, HISTORY_BAD - 1));
         assert!(!history_prunable(4, 4, HISTORY_BAD - 1));
         assert!(!history_prunable(3, 3, HISTORY_BAD - 1));
