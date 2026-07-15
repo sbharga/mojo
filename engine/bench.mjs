@@ -26,6 +26,11 @@ function runPosition(name, fen, thinkTimeMs, multiPv) {
       const result = engine.analyze_depth(depth, multiPv, Math.max(8, remaining))
       if (!result.timed_out && result.lines.length > 0) latest = result
       if (result.timed_out) break
+      if (
+        latest
+        && performance.now() - started
+          >= thinkTimeMs * (result.soft_time_fraction ?? 0.5)
+      ) break
     }
     const wallMs = Math.round(performance.now() - started)
     return {

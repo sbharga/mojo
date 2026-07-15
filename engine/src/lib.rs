@@ -29,6 +29,7 @@ struct AnalysisResult {
     depth: u8,
     nodes: u64,
     root_node_fraction: f64,
+    soft_time_fraction: f64,
     elapsed_ms: f64,
     timed_out: bool,
     lines: Vec<PrincipalVariation>,
@@ -126,6 +127,7 @@ fn run_analysis(
         depth,
         nodes: result.nodes,
         root_node_fraction: result.root_node_fraction,
+        soft_time_fraction: result.soft_time_fraction,
         elapsed_ms: now_ms() - start,
         timed_out: result.timed_out,
         lines: result

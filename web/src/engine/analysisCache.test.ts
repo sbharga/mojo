@@ -8,6 +8,7 @@ function makeAnalysis(overrides: Partial<Analysis> = {}): Analysis {
     depth: 4,
     nodes: 100,
     root_node_fraction: 0.5,
+    soft_time_fraction: 0.5,
     elapsed_ms: 10,
     timed_out: false,
     lines: [{ score_cp: 20, moves: ["e2e4"] }],
