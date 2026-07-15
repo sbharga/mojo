@@ -1,12 +1,12 @@
 use cozy_chess::{
     BitBoard, Board, Color, File, Piece, Rank, Square, get_bishop_moves, get_king_moves,
-    get_knight_moves, get_rook_moves,
+    get_knight_moves, get_pawn_attacks, get_rook_moves,
 };
 
 use crate::eval_tuned::DELTAS;
 
 #[cfg(feature = "tuning")]
-pub(crate) const PARAMETER_COUNT: usize = 822;
+pub(crate) const PARAMETER_COUNT: usize = 828;
 const MG_VALUE_START: usize = 0;
 const EG_VALUE_START: usize = 6;
 const MG_PST_START: usize = 12;
@@ -33,6 +33,12 @@ const MG_PASSER_START: usize = 804;
 const EG_PASSER_START: usize = 812;
 const PASSER_OWN_KING: usize = 820;
 const PASSER_ENEMY_KING: usize = 821;
+const PAWN_THREAT_MG: usize = 822;
+const PAWN_THREAT_EG: usize = 823;
+const MINOR_MAJOR_THREAT_MG: usize = 824;
+const MINOR_MAJOR_THREAT_EG: usize = 825;
+const HANGING_THREAT_MG: usize = 826;
+const HANGING_THREAT_EG: usize = 827;
 
 fn tuned(base: i32, parameter: usize) -> i32 {
     base + i32::from(DELTAS[parameter])
@@ -86,6 +92,12 @@ const EG_PASSER: [i32; 8] = [0, 10, 20, 40, 70, 120, 200, 0];
 // attacking king being close, the classic "king escorts / king races" rule.
 const PASSER_OWN_KING_DIST_WEIGHT_EG: i32 = 5;
 const PASSER_ENEMY_KING_DIST_WEIGHT_EG: i32 = 10;
+const PAWN_THREAT_BONUS_MG: i32 = 12;
+const PAWN_THREAT_BONUS_EG: i32 = 18;
+const MINOR_MAJOR_THREAT_BONUS_MG: i32 = 16;
+const MINOR_MAJOR_THREAT_BONUS_EG: i32 = 12;
+const HANGING_THREAT_BONUS_MG: i32 = 20;
+const HANGING_THREAT_BONUS_EG: i32 = 24;
 
 // Compact PeSTO-style piece-square model. Tables are indexed a8..h1.
 #[rustfmt::skip]
@@ -203,6 +215,12 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
         get_king_moves(board.king(Color::White)) | board.king(Color::White).bitboard(),
         get_king_moves(board.king(Color::Black)) | board.king(Color::Black).bitboard(),
     ];
+    let pawn_attacks = [
+        pawn_attacks(board, Color::White),
+        pawn_attacks(board, Color::Black),
+    ];
+    let mut all_attacks = pawn_attacks;
+    let mut minor_attacks = [BitBoard::EMPTY; 2];
 
     for piece in Piece::ALL {
         for color in [Color::White, Color::Black] {
@@ -230,39 +248,68 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
 
                 let own = board.colors(color);
                 let raw_attacks = match piece {
-                    Piece::Knight => Some(get_knight_moves(square)),
-                    Piece::Bishop => Some(get_bishop_moves(square, occupied)),
-                    Piece::Rook => Some(get_rook_moves(square, occupied)),
+                    Piece::Pawn => get_pawn_attacks(square, color),
+                    Piece::Knight => get_knight_moves(square),
+                    Piece::Bishop => get_bishop_moves(square, occupied),
+                    Piece::Rook => get_rook_moves(square, occupied),
                     Piece::Queen => {
-                        Some(get_bishop_moves(square, occupied) | get_rook_moves(square, occupied))
+                        get_bishop_moves(square, occupied) | get_rook_moves(square, occupied)
                     }
-                    _ => None,
+                    Piece::King => get_king_moves(square),
                 };
-                if let Some(raw_attacks) = raw_attacks {
-                    let (mobility_weight, mobility_parameter) = match piece {
-                        Piece::Knight => (KNIGHT_MOBILITY_WEIGHT, MOBILITY_START),
-                        Piece::Bishop => (BISHOP_MOBILITY_WEIGHT, MOBILITY_START + 1),
-                        Piece::Rook => (ROOK_MOBILITY_WEIGHT, MOBILITY_START + 2),
-                        Piece::Queen => (QUEEN_MOBILITY_WEIGHT, MOBILITY_START + 3),
-                        _ => unreachable!("only sliding and leaping pieces have attacks"),
-                    };
-                    let mobility = (raw_attacks & !own).len() as i32
-                        * tuned(mobility_weight, mobility_parameter);
-                    mg += sign * mobility;
-                    eg += sign * mobility;
-
-                    let (king_zone_weight, king_zone_parameter) = match piece {
-                        Piece::Knight => (KING_ZONE_KNIGHT_WEIGHT_MG, KING_ZONE_START),
-                        Piece::Bishop => (KING_ZONE_BISHOP_WEIGHT_MG, KING_ZONE_START + 1),
-                        Piece::Rook => (KING_ZONE_ROOK_WEIGHT_MG, KING_ZONE_START + 2),
-                        Piece::Queen => (KING_ZONE_QUEEN_WEIGHT_MG, KING_ZONE_START + 3),
-                        _ => unreachable!("only sliding and leaping pieces have attacks"),
-                    };
-                    let zone_hits = (raw_attacks & king_zone[!color as usize]).len() as i32;
-                    mg += sign * zone_hits * tuned(king_zone_weight, king_zone_parameter);
+                all_attacks[color as usize] |= raw_attacks;
+                if matches!(piece, Piece::Knight | Piece::Bishop) {
+                    minor_attacks[color as usize] |= raw_attacks;
                 }
+                if matches!(piece, Piece::Pawn | Piece::King) {
+                    continue;
+                }
+                let (mobility_weight, mobility_parameter) = match piece {
+                    Piece::Knight => (KNIGHT_MOBILITY_WEIGHT, MOBILITY_START),
+                    Piece::Bishop => (BISHOP_MOBILITY_WEIGHT, MOBILITY_START + 1),
+                    Piece::Rook => (ROOK_MOBILITY_WEIGHT, MOBILITY_START + 2),
+                    Piece::Queen => (QUEEN_MOBILITY_WEIGHT, MOBILITY_START + 3),
+                    _ => unreachable!("only sliding and leaping pieces have attacks"),
+                };
+                let mobility = safe_mobility(raw_attacks, own, pawn_attacks[!color as usize])
+                    * tuned(mobility_weight, mobility_parameter);
+                mg += sign * mobility;
+                eg += sign * mobility;
+
+                let (king_zone_weight, king_zone_parameter) = match piece {
+                    Piece::Knight => (KING_ZONE_KNIGHT_WEIGHT_MG, KING_ZONE_START),
+                    Piece::Bishop => (KING_ZONE_BISHOP_WEIGHT_MG, KING_ZONE_START + 1),
+                    Piece::Rook => (KING_ZONE_ROOK_WEIGHT_MG, KING_ZONE_START + 2),
+                    Piece::Queen => (KING_ZONE_QUEEN_WEIGHT_MG, KING_ZONE_START + 3),
+                    _ => unreachable!("only sliding and leaping pieces have attacks"),
+                };
+                let zone_hits = (raw_attacks & king_zone[!color as usize]).len() as i32;
+                mg += sign * zone_hits * tuned(king_zone_weight, king_zone_parameter);
             }
         }
+    }
+
+    for color in [Color::White, Color::Black] {
+        let sign = if color == Color::White { 1 } else { -1 };
+        let enemy = board.colors(!color);
+        let enemy_majors =
+            board.colored_pieces(!color, Piece::Rook) | board.colored_pieces(!color, Piece::Queen);
+        let [pawn_targets, minor_major_targets, hanging_targets] = threat_counts(
+            pawn_attacks[color as usize],
+            minor_attacks[color as usize],
+            all_attacks[color as usize],
+            all_attacks[!color as usize],
+            enemy,
+            enemy_majors,
+        );
+        mg += sign
+            * (pawn_targets * tuned(PAWN_THREAT_BONUS_MG, PAWN_THREAT_MG)
+                + minor_major_targets * tuned(MINOR_MAJOR_THREAT_BONUS_MG, MINOR_MAJOR_THREAT_MG)
+                + hanging_targets * tuned(HANGING_THREAT_BONUS_MG, HANGING_THREAT_MG));
+        eg += sign
+            * (pawn_targets * tuned(PAWN_THREAT_BONUS_EG, PAWN_THREAT_EG)
+                + minor_major_targets * tuned(MINOR_MAJOR_THREAT_BONUS_EG, MINOR_MAJOR_THREAT_EG)
+                + hanging_targets * tuned(HANGING_THREAT_BONUS_EG, HANGING_THREAT_EG));
     }
 
     mg += pawn_structure.mg;
@@ -343,6 +390,34 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
     } else {
         -white_score + tuned(TEMPO_BONUS, TEMPO)
     }
+}
+
+fn pawn_attacks(board: &Board, color: Color) -> BitBoard {
+    board
+        .colored_pieces(color, Piece::Pawn)
+        .into_iter()
+        .fold(BitBoard::EMPTY, |attacks, pawn| {
+            attacks | get_pawn_attacks(pawn, color)
+        })
+}
+
+fn safe_mobility(raw_attacks: BitBoard, own: BitBoard, enemy_pawn_attacks: BitBoard) -> i32 {
+    (raw_attacks & !own & !enemy_pawn_attacks).len() as i32
+}
+
+fn threat_counts(
+    pawn_attacks: BitBoard,
+    minor_attacks: BitBoard,
+    all_attacks: BitBoard,
+    enemy_defenses: BitBoard,
+    enemy: BitBoard,
+    enemy_majors: BitBoard,
+) -> [i32; 3] {
+    [
+        (pawn_attacks & enemy).len() as i32,
+        (minor_attacks & enemy_majors).len() as i32,
+        (all_attacks & enemy & !enemy_defenses).len() as i32,
+    ]
 }
 
 fn bare_king_mating_bonus(board: &Board, attacker: Color) -> i32 {
@@ -441,6 +516,35 @@ pub(crate) fn insufficient_material(board: &Board) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod evaluation_tests {
+    use super::*;
+
+    #[test]
+    fn safe_mobility_excludes_own_and_enemy_pawn_controlled_squares() {
+        let raw = Square::A1.bitboard() | Square::B1.bitboard() | Square::C1.bitboard();
+        assert_eq!(
+            safe_mobility(raw, Square::A1.bitboard(), Square::B1.bitboard()),
+            1
+        );
+    }
+
+    #[test]
+    fn threat_categories_count_distinct_tactical_signals() {
+        assert_eq!(
+            threat_counts(
+                Square::A1.bitboard(),
+                Square::B1.bitboard(),
+                Square::A1.bitboard() | Square::B1.bitboard() | Square::C1.bitboard(),
+                Square::B1.bitboard(),
+                Square::A1.bitboard() | Square::B1.bitboard() | Square::C1.bitboard(),
+                Square::B1.bitboard(),
+            ),
+            [1, 1, 2]
+        );
+    }
 }
 
 #[cfg(feature = "tuning")]
@@ -568,6 +672,12 @@ pub mod tuning {
         weights[EG_PASSER_START..PASSER_OWN_KING].copy_from_slice(&EG_PASSER);
         weights[PASSER_OWN_KING] = PASSER_OWN_KING_DIST_WEIGHT_EG;
         weights[PASSER_ENEMY_KING] = PASSER_ENEMY_KING_DIST_WEIGHT_EG;
+        weights[PAWN_THREAT_MG] = PAWN_THREAT_BONUS_MG;
+        weights[PAWN_THREAT_EG] = PAWN_THREAT_BONUS_EG;
+        weights[MINOR_MAJOR_THREAT_MG] = MINOR_MAJOR_THREAT_BONUS_MG;
+        weights[MINOR_MAJOR_THREAT_EG] = MINOR_MAJOR_THREAT_BONUS_EG;
+        weights[HANGING_THREAT_MG] = HANGING_THREAT_BONUS_MG;
+        weights[HANGING_THREAT_EG] = HANGING_THREAT_BONUS_EG;
         weights
     }
 
@@ -580,6 +690,12 @@ pub mod tuning {
             get_king_moves(board.king(Color::White)) | board.king(Color::White).bitboard(),
             get_king_moves(board.king(Color::Black)) | board.king(Color::Black).bitboard(),
         ];
+        let pawn_attacks = [
+            super::pawn_attacks(board, Color::White),
+            super::pawn_attacks(board, Color::Black),
+        ];
+        let mut all_attacks = pawn_attacks;
+        let mut minor_attacks = [BitBoard::EMPTY; 2];
         let mut phase = 0;
 
         for piece in Piece::ALL {
@@ -599,15 +715,20 @@ pub mod tuning {
                     phase += PHASE[piece_index];
 
                     let raw_attacks = match piece {
-                        Piece::Knight => Some(get_knight_moves(square)),
-                        Piece::Bishop => Some(get_bishop_moves(square, occupied)),
-                        Piece::Rook => Some(get_rook_moves(square, occupied)),
-                        Piece::Queen => Some(
-                            get_bishop_moves(square, occupied) | get_rook_moves(square, occupied),
-                        ),
-                        _ => None,
+                        Piece::Pawn => get_pawn_attacks(square, color),
+                        Piece::Knight => get_knight_moves(square),
+                        Piece::Bishop => get_bishop_moves(square, occupied),
+                        Piece::Rook => get_rook_moves(square, occupied),
+                        Piece::Queen => {
+                            get_bishop_moves(square, occupied) | get_rook_moves(square, occupied)
+                        }
+                        Piece::King => get_king_moves(square),
                     };
-                    if let Some(raw_attacks) = raw_attacks {
+                    all_attacks[color as usize] |= raw_attacks;
+                    if matches!(piece, Piece::Knight | Piece::Bishop) {
+                        minor_attacks[color as usize] |= raw_attacks;
+                    }
+                    if !matches!(piece, Piece::Pawn | Piece::King) {
                         let offset = match piece {
                             Piece::Knight => 0,
                             Piece::Bishop => 1,
@@ -615,7 +736,11 @@ pub mod tuning {
                             Piece::Queen => 3,
                             _ => unreachable!(),
                         };
-                        let mobility = (raw_attacks & !board.colors(color)).len() as i32;
+                        let mobility = super::safe_mobility(
+                            raw_attacks,
+                            board.colors(color),
+                            pawn_attacks[!color as usize],
+                        );
                         mg[MOBILITY_START + offset] += sign * mobility;
                         eg[MOBILITY_START + offset] += sign * mobility;
                         let zone_hits = (raw_attacks & king_zone[!color as usize]).len() as i32;
@@ -623,6 +748,27 @@ pub mod tuning {
                     }
                 }
             }
+        }
+
+        for color in [Color::White, Color::Black] {
+            let sign = color_sign(color);
+            let enemy = board.colors(!color);
+            let enemy_majors = board.colored_pieces(!color, Piece::Rook)
+                | board.colored_pieces(!color, Piece::Queen);
+            let [pawn_targets, minor_major_targets, hanging_targets] = super::threat_counts(
+                pawn_attacks[color as usize],
+                minor_attacks[color as usize],
+                all_attacks[color as usize],
+                all_attacks[!color as usize],
+                enemy,
+                enemy_majors,
+            );
+            mg[PAWN_THREAT_MG] += sign * pawn_targets;
+            eg[PAWN_THREAT_EG] += sign * pawn_targets;
+            mg[MINOR_MAJOR_THREAT_MG] += sign * minor_major_targets;
+            eg[MINOR_MAJOR_THREAT_EG] += sign * minor_major_targets;
+            mg[HANGING_THREAT_MG] += sign * hanging_targets;
+            eg[HANGING_THREAT_EG] += sign * hanging_targets;
         }
 
         for color in [Color::White, Color::Black] {
