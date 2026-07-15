@@ -37,6 +37,7 @@ export interface AnalyzeRequest {
 
 export interface InitializeRequest {
   type: "initialize";
+  stopBuffer?: SharedArrayBuffer;
 }
 export interface CancelRequest {
   type: "cancel";

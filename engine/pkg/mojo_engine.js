@@ -89,6 +89,20 @@ export class Engine {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
     }
+    /**
+     * Installs an optional shared cancellation watermark supplied by the worker.
+     * @param {Int32Array} stop_flag
+     */
+    set_stop_flag(stop_flag) {
+        wasm.engine_set_stop_flag(this.__wbg_ptr, addHeapObject(stop_flag));
+    }
+    /**
+     * Identifies the request currently being searched for watermark comparison.
+     * @param {number} request_id
+     */
+    set_stop_request(request_id) {
+        wasm.engine_set_stop_request(this.__wbg_ptr, request_id);
+    }
 }
 if (Symbol.dispose) Engine.prototype[Symbol.dispose] = Engine.prototype.free;
 
@@ -277,6 +291,10 @@ function __wbg_get_imports() {
             const ret = getObject(arg0).length;
             return ret;
         },
+        __wbg_load_209206003cdf5be2: function() { return handleError(function (arg0, arg1) {
+            const ret = Atomics.load(getObject(arg0), arg1 >>> 0);
+            return ret;
+        }, arguments); },
         __wbg_new_32b398fb48b6d94a: function() {
             const ret = new Array();
             return addHeapObject(ret);

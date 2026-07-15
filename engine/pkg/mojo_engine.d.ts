@@ -27,6 +27,14 @@ export class Engine {
      * Returns an error when the root or any prior FEN is invalid.
      */
     set_position(fen: string, prior_fens: any): void;
+    /**
+     * Installs an optional shared cancellation watermark supplied by the worker.
+     */
+    set_stop_flag(stop_flag: Int32Array): void;
+    /**
+     * Identifies the request currently being searched for watermark comparison.
+     */
+    set_stop_request(request_id: number): void;
 }
 
 /**
@@ -55,6 +63,8 @@ export interface InitOutput {
     readonly engine_name: (a: number) => void;
     readonly engine_new: () => number;
     readonly engine_set_position: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly engine_set_stop_flag: (a: number, b: number) => void;
+    readonly engine_set_stop_request: (a: number, b: number) => void;
     readonly fallback_move: (a: number, b: number, c: number) => void;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;

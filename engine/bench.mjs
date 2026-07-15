@@ -17,6 +17,10 @@ function runPosition(name, fen, thinkTimeMs, multiPv) {
   // transposition table and make later samples look artificially faster.
   const engine = new Engine()
   try {
+    // Match the cross-origin-isolated browser path, including its atomic poll.
+    const stopFlag = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
+    engine.set_stop_flag(stopFlag)
+    engine.set_stop_request(1)
     engine.set_position(fen, [])
     const started = performance.now()
     let latest

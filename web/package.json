@@ -14,11 +14,12 @@
     "test:openings": "node ../engine/validate-openings.mjs",
     "test:selfplay": "node ../engine/selfplay.mjs --baseline engine/pkg/mojo_engine_bg.wasm --depth 2 --openings 1 --max-plies 20",
     "test:strength": "node ../engine/accuracy.mjs",
+    "test:cancellation": "node ../engine/validate-cancellation.mjs",
     "dev": "npm run build:engine && vite",
     "build": "npm run build:engine && tsc -b && vite build",
     "lint": "eslint .",
     "test": "vitest run",
-    "check": "npm run lint && tsc -b && npm run test && npm run test:openings && npm run test:strength && npm run test:selfplay"
+    "check": "npm run lint && tsc -b && npm run test && npm run test:openings && npm run test:strength && npm run test:cancellation && npm run test:selfplay"
   },
   "dependencies": {
     "chess.js": "^1.4.0",
