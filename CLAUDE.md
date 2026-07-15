@@ -124,6 +124,12 @@ CI (`.github/workflows/ci.yml`) runs, in order: `cargo fmt --check`, `cargo clip
 - `purpose` on a request is `'analysis'` (MultiPV 3, panel display) or
   `'move'` (MultiPV 1; on failure to find any completed line, falls back to
   `engine.fallback_move()` so the app never stalls with no move).
+- For a move request, `useEngine.ts` checks the cached analysis of the prior
+  position. If its primary move produced the current FEN, the remaining PV,
+  flipped score, and reduced depth are sent as a ponder seed. Rust validates
+  the complete suffix before installing exact TT entries; a missed prediction
+  or illegal line seeds nothing. `engine/validate-seeding.mjs` guards the warm
+  path and verifies it searches fewer nodes than a cold engine.
 - `web/src/engine/types.ts` is the single source of truth for the message
   shapes (`WorkerRequest`/`WorkerMessage`/`Analysis`) shared between the main
   thread and the worker — keep both sides in sync through this file rather

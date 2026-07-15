@@ -67,6 +67,32 @@ export class Engine {
         return this;
     }
     /**
+     * Seeds this instance's transposition table from another worker's PV.
+     *
+     * # Errors
+     * Returns an error if the score is ambiguous or any PV move is illegal.
+     * @param {any} moves
+     * @param {number} depth
+     * @param {number | null} [score_cp]
+     * @param {number | null} [mate_in]
+     * @returns {number}
+     */
+    seed_pv(moves, depth, score_cp, mate_in) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.engine_seed_pv(retptr, this.__wbg_ptr, addHeapObject(moves), depth, isLikeNone(score_cp) ? Number.MAX_SAFE_INTEGER : (score_cp) >> 0, isLikeNone(mate_in) ? Number.MAX_SAFE_INTEGER : (mate_in) >> 0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return r0 >>> 0;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Sets the root and its preceding game positions.
      *
      * # Errors

@@ -102,6 +102,37 @@ impl Engine {
         self.search.set_stop_request(request_id);
     }
 
+    /// Seeds this instance's transposition table from another worker's PV.
+    ///
+    /// # Errors
+    /// Returns an error if the score is ambiguous or any PV move is illegal.
+    pub fn seed_pv(
+        &mut self,
+        moves: JsValue,
+        depth: u8,
+        score_cp: Option<i32>,
+        mate_in: Option<i32>,
+    ) -> Result<u32, JsValue> {
+        let board = self
+            .board
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("No position has been set"))?;
+        let move_strings: Vec<String> = serde_wasm_bindgen::from_value(moves)
+            .map_err(|error| JsValue::from_str(&format!("Invalid PV: {error}")))?;
+        let score = seed_score(score_cp, mate_in).map_err(JsValue::from_str)?;
+        let mut position = board.clone();
+        let mut parsed = Vec::with_capacity(move_strings.len());
+        for notation in move_strings {
+            let mv = search::legal_moves(&position)
+                .into_iter()
+                .find(|&candidate| uci_move(&position, candidate) == notation)
+                .ok_or_else(|| JsValue::from_str(&format!("Illegal PV move: {notation}")))?;
+            position.play(mv);
+            parsed.push(mv);
+        }
+        Ok(self.search.seed_pv(board, &parsed, score, i16::from(depth)) as u32)
+    }
+
     /// Returns the best static one-ply fallback for the current position.
     pub fn fallback_move(&self) -> Option<String> {
         let board = self.board.as_ref()?;
@@ -178,6 +209,19 @@ fn parse_board(fen: &str) -> Result<Board, JsValue> {
 
 fn serialize_result(result: AnalysisResult) -> Result<JsValue, JsValue> {
     serde_wasm_bindgen::to_value(&result).map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+fn seed_score(score_cp: Option<i32>, mate_in: Option<i32>) -> Result<i32, &'static str> {
+    match (score_cp, mate_in) {
+        (Some(score), None) => {
+            Ok(score.clamp(-MATE_SCORE + MAX_PLY as i32, MATE_SCORE - MAX_PLY as i32))
+        }
+        (None, Some(mate)) if mate != 0 && mate.unsigned_abs() <= MAX_PLY as u32 => {
+            let distance = 2 * mate.abs() - 1;
+            Ok(mate.signum() * (MATE_SCORE - distance))
+        }
+        _ => Err("PV seed requires exactly one centipawn or nonzero mate score"),
+    }
 }
 
 fn score_to_line(board: &Board, line: SearchLine) -> PrincipalVariation {
@@ -338,6 +382,15 @@ mod tests {
         ] {
             assert!(!insufficient_material(&fen.parse::<Board>().unwrap()));
         }
+    }
+
+    #[test]
+    fn pv_seed_scores_reconstruct_centipawns_and_mates() {
+        assert_eq!(seed_score(Some(125), None).unwrap(), 125);
+        assert_eq!(seed_score(None, Some(3)).unwrap(), MATE_SCORE - 5);
+        assert_eq!(seed_score(None, Some(-1)).unwrap(), -MATE_SCORE + 1);
+        assert!(seed_score(Some(0), Some(1)).is_err());
+        assert!(seed_score(None, Some(0)).is_err());
     }
 
     #[test]

@@ -15,7 +15,6 @@ use cozy_chess::{Board, Color, Move, Piece};
 
 use crate::eval::insufficient_material;
 
-#[cfg(test)]
 pub(crate) use moves::legal_moves;
 pub(crate) use moves::{fallback, played};
 
@@ -291,6 +290,33 @@ impl SearchCore {
         self.prior_positions.clear();
         self.prior_positions
             .extend(prior.iter().map(repetition_key));
+    }
+
+    pub(crate) fn seed_pv(
+        &mut self,
+        board: &Board,
+        moves: &[Move],
+        score: i32,
+        depth: i16,
+    ) -> usize {
+        let mut position = board.clone();
+        let count = moves.len().min(depth.max(0) as usize);
+        for (ply, &mv) in moves.iter().take(count).enumerate() {
+            if !position.is_legal(mv) {
+                return ply;
+            }
+            let node_score = if ply.is_multiple_of(2) { score } else { -score };
+            self.store(
+                rule_key(&position),
+                depth - ply as i16,
+                score_to_tt(node_score, ply),
+                Bound::Exact,
+                Some(mv),
+                None,
+            );
+            position.play(mv);
+        }
+        count
     }
 
     pub(crate) fn analyze_depth(
@@ -1929,5 +1955,25 @@ mod tests {
         fast.nodes = 1_000_000;
         fast.calibrate_clock_checks(1.0);
         assert_eq!(fast.clock_check_interval, MAX_TIME_CHECK_INTERVAL);
+    }
+
+    #[test]
+    fn pv_seed_installs_exact_decreasing_depth_entries() {
+        let board = Board::default();
+        let moves = ["e2e4".parse().unwrap(), "e7e5".parse().unwrap()];
+        let mut search = SearchCore::new();
+        assert_eq!(search.seed_pv(&board, &moves, 42, 6), 2);
+
+        let root = search.probe(rule_key(&board)).unwrap();
+        assert_eq!(root.bound(), Bound::Exact);
+        assert_eq!(root.depth, 6);
+        assert_eq!(decode_move(root.best), Some(moves[0]));
+        assert_eq!(score_from_tt(i32::from(root.score), 0), 42);
+
+        let child = played(&board, moves[0]);
+        let reply = search.probe(rule_key(&child)).unwrap();
+        assert_eq!(reply.depth, 5);
+        assert_eq!(decode_move(reply.best), Some(moves[1]));
+        assert_eq!(score_from_tt(i32::from(reply.score), 1), -42);
     }
 }
