@@ -17,7 +17,7 @@ pub(crate) use moves::{fallback, legal_moves, played};
 
 use moves::{captured_value, decode_move, encode_move, is_capture, repetition_key, rule_key};
 use see::static_exchange;
-use tt::{Bound, TT_ENTRIES, TTEntry, score_from_tt, score_to_tt};
+use tt::{Bound, TT_BUCKETS, TT_ENTRIES, TTBucket, TTEntry, score_from_tt, score_to_tt};
 
 pub(crate) const MATE_SCORE: i32 = 30_000;
 pub(crate) const INF: i32 = 32_000;
@@ -93,7 +93,7 @@ pub(crate) struct SearchResult {
 }
 
 pub(crate) struct SearchCore {
-    table: Box<[TTEntry]>,
+    table: Box<[TTBucket]>,
     killers: [[Option<Move>; 2]; MAX_PLY],
     history: [[i32; 64]; 64],
     countermove: [[u16; 64]; 64],
@@ -115,8 +115,10 @@ pub(crate) struct SearchCore {
 impl SearchCore {
     pub(crate) fn new() -> Self {
         debug_assert_eq!(std::mem::size_of::<TTEntry>(), 16);
+        debug_assert_eq!(std::mem::size_of::<TTBucket>(), 64);
+        debug_assert_eq!(TT_ENTRIES * std::mem::size_of::<TTEntry>(), 2 * 1024 * 1024);
         Self {
-            table: vec![TTEntry::default(); TT_ENTRIES].into_boxed_slice(),
+            table: vec![TTBucket::default(); TT_BUCKETS].into_boxed_slice(),
             killers: [[None; 2]; MAX_PLY],
             history: [[0; 64]; 64],
             countermove: [[0; 64]; 64],
@@ -233,7 +235,9 @@ impl SearchCore {
         if moves.is_empty() {
             return None;
         }
-        let tt_best = self.probe(key).and_then(|entry| decode_move(entry.best));
+        let tt_best = self
+            .probe(key)
+            .and_then(|entry| self.valid_tt_move(board, entry));
         self.order_moves(board, &mut moves, tt_best, None, 0);
         self.pv_len[0] = 0;
         let mut best_score = -INF;
@@ -294,7 +298,14 @@ impl SearchCore {
                 } else {
                     Bound::Exact
                 };
-                self.store(key, depth, score_to_tt(best_score, 0), bound, best_move);
+                self.store(
+                    key,
+                    depth,
+                    score_to_tt(best_score, 0),
+                    bound,
+                    Some(best_move),
+                    None,
+                );
             }
             SearchLine {
                 score: best_score,
@@ -346,13 +357,13 @@ impl SearchCore {
         let key = rule_key(board);
         let original_alpha = alpha;
         let entry = self.probe(key);
-        let tt_best = entry.and_then(|value| decode_move(value.best));
+        let tt_best = entry.and_then(|value| self.valid_tt_move(board, value));
         if let Some(entry) = entry
             && i16::from(entry.depth) >= depth
             && !pv_node
         {
             let score = score_from_tt(i32::from(entry.score), ply);
-            match entry.bound {
+            match entry.bound() {
                 Bound::Exact => return score,
                 Bound::Lower if score >= beta => return score,
                 Bound::Upper if score <= alpha => return score,
@@ -398,13 +409,16 @@ impl SearchCore {
             }
         }
 
-        let mut static_eval = None;
+        let mut static_eval = entry.and_then(TTEntry::static_eval);
+        if static_eval.is_none() && !in_check {
+            static_eval = Some(evaluate(board));
+        }
         if !pv_node
             && !in_check
             && depth <= RFP_MAX_DEPTH
             && beta.abs() < MATE_SCORE - MAX_PLY as i32
         {
-            let eval = evaluate(board);
+            let eval = *static_eval.get_or_insert_with(|| evaluate(board));
             static_eval = Some(eval);
             if eval - RFP_MARGIN_PER_PLY * i32::from(depth) >= beta {
                 return if board.generate_moves(|_| true) {
@@ -551,7 +565,14 @@ impl SearchCore {
             Bound::Exact
         };
         if let Some(best_move) = best_move {
-            self.store(key, depth, score_to_tt(best_score, ply), bound, best_move);
+            self.store(
+                key,
+                depth,
+                score_to_tt(best_score, ply),
+                bound,
+                Some(best_move),
+                static_eval,
+            );
         }
         best_score
     }
@@ -569,14 +590,39 @@ impl SearchCore {
             return 0;
         }
 
+        let key = rule_key(board);
+        let original_alpha = alpha;
+        let entry = self.probe(key);
+        if let Some(entry) = entry
+            && entry.depth >= 0
+        {
+            let score = score_from_tt(i32::from(entry.score), ply);
+            match entry.bound() {
+                Bound::Exact => return score,
+                Bound::Lower if score >= beta => return score,
+                Bound::Upper if score <= alpha => return score,
+                _ => {}
+            }
+        }
+
         let in_check = !board.checkers().is_empty();
         let all_moves = legal_moves(board);
         if all_moves.is_empty() {
             return terminal_score(board, ply);
         }
-        let stand_pat = evaluate(board);
+        let stand_pat = entry
+            .and_then(TTEntry::static_eval)
+            .unwrap_or_else(|| evaluate(board));
         if !in_check {
             if stand_pat >= beta {
+                self.store(
+                    key,
+                    0,
+                    score_to_tt(beta, ply),
+                    Bound::Lower,
+                    None,
+                    Some(stand_pat),
+                );
                 return beta;
             }
             alpha = alpha.max(stand_pat);
@@ -590,6 +636,7 @@ impl SearchCore {
         );
         let see_values = self.order_quiescence_moves(board, &mut tactical, ply);
 
+        let mut best_move = None;
         for (mv, see) in tactical.into_iter().zip(see_values) {
             let capture = is_capture(board, mv);
             let child = played(board, mv);
@@ -612,13 +659,35 @@ impl SearchCore {
                 return 0;
             }
             if score >= beta {
+                self.store(
+                    key,
+                    0,
+                    score_to_tt(beta, ply),
+                    Bound::Lower,
+                    Some(mv),
+                    Some(stand_pat),
+                );
                 return beta;
             }
             if score > alpha {
                 alpha = score;
+                best_move = Some(mv);
                 self.update_pv(ply, mv);
             }
         }
+        let bound = if alpha <= original_alpha {
+            Bound::Upper
+        } else {
+            Bound::Exact
+        };
+        self.store(
+            key,
+            0,
+            score_to_tt(alpha, ply),
+            bound,
+            best_move,
+            Some(stand_pat),
+        );
         alpha
     }
 
@@ -678,26 +747,61 @@ impl SearchCore {
     }
 
     fn probe(&self, key: u64) -> Option<TTEntry> {
-        let entry = self.table[key as usize & (TT_ENTRIES - 1)];
-        (entry.bound != Bound::Empty && entry.key == key).then_some(entry)
+        self.table[key as usize & (TT_BUCKETS - 1)]
+            .0
+            .iter()
+            .copied()
+            .find(|entry| entry.bound() != Bound::Empty && entry.key == key)
     }
 
-    fn store(&mut self, key: u64, depth: i16, score: i32, bound: Bound, best: Move) {
-        let slot = &mut self.table[key as usize & (TT_ENTRIES - 1)];
-        let replace = slot.bound == Bound::Empty
-            || slot.generation != self.generation
-            || depth >= i16::from(slot.depth);
-        if replace {
-            *slot = TTEntry {
-                key,
-                best: encode_move(best),
-                score: score.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
-                depth: depth.clamp(i16::from(i8::MIN), i16::from(i8::MAX)) as i8,
-                bound,
-                generation: self.generation,
-                padding: 0,
-            };
+    fn valid_tt_move(&self, board: &Board, entry: TTEntry) -> Option<Move> {
+        decode_move(entry.best).filter(|mv| board.is_legal(*mv))
+    }
+
+    fn store(
+        &mut self,
+        key: u64,
+        depth: i16,
+        score: i32,
+        bound: Bound,
+        best: Option<Move>,
+        static_eval: Option<i32>,
+    ) {
+        let bucket = &mut self.table[key as usize & (TT_BUCKETS - 1)].0;
+        let matching = bucket
+            .iter()
+            .position(|entry| entry.bound() != Bound::Empty && entry.key == key);
+        if let Some(index) = matching
+            && depth < i16::from(bucket[index].depth)
+        {
+            return;
         }
+        let index = matching
+            .or_else(|| {
+                bucket
+                    .iter()
+                    .position(|entry| entry.bound() == Bound::Empty)
+            })
+            .unwrap_or_else(|| {
+                let generation = self.generation & 0b11_1111;
+                bucket
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, entry)| {
+                        let age = generation.wrapping_sub(entry.generation()) & 0b11_1111;
+                        (age, -i16::from(entry.depth))
+                    })
+                    .map_or(0, |(index, _)| index)
+            });
+        bucket[index] = TTEntry::new(
+            key,
+            best.map_or(0, encode_move),
+            score.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
+            static_eval,
+            depth.clamp(i16::from(i8::MIN), i16::from(i8::MAX)) as i8,
+            bound,
+            self.generation,
+        );
     }
 
     #[cfg(test)]
@@ -755,8 +859,26 @@ mod tests {
         let entry = search.probe(rule_key(&board)).unwrap();
 
         assert_eq!(entry.depth, 4);
-        assert_eq!(entry.bound, Bound::Exact);
+        assert_eq!(entry.bound(), Bound::Exact);
         assert_eq!(decode_move(entry.best), Some(primary));
+    }
+
+    #[test]
+    fn quiescence_reuses_depth_zero_table_entry() {
+        let board = "4k3/8/8/3p4/4P3/8/8/4K3 w - - 0 1"
+            .parse::<Board>()
+            .unwrap();
+        let mut search = SearchCore::new();
+        search.path.push(repetition_key(&board));
+
+        let first = search.quiescence(&board, -INF, INF, 0);
+        let first_nodes = search.nodes;
+        search.nodes = 0;
+        let second = search.quiescence(&board, -INF, INF, 0);
+
+        assert!(first_nodes > 1);
+        assert_eq!(second, first);
+        assert_eq!(search.nodes, 1);
     }
 
     #[test]
