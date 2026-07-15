@@ -20,6 +20,7 @@ export interface Analysis {
   soft_time_fraction: number;
   predicted_next_ms: number;
   ebf_gate_override: boolean;
+  clock_check_interval: number;
   elapsed_ms: number;
   timed_out: boolean;
   lines: AnalysisLine[];

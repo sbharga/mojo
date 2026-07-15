@@ -32,6 +32,7 @@ struct AnalysisResult {
     soft_time_fraction: f64,
     predicted_next_ms: f64,
     ebf_gate_override: bool,
+    clock_check_interval: u32,
     elapsed_ms: f64,
     timed_out: bool,
     lines: Vec<PrincipalVariation>,
@@ -132,6 +133,7 @@ fn run_analysis(
         soft_time_fraction: result.soft_time_fraction,
         predicted_next_ms: result.predicted_next_ms,
         ebf_gate_override: result.ebf_gate_override,
+        clock_check_interval: result.clock_check_interval,
         elapsed_ms: now_ms() - start,
         timed_out: result.timed_out,
         lines: result

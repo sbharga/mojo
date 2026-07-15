@@ -11,6 +11,7 @@ function makeAnalysis(overrides: Partial<Analysis> = {}): Analysis {
     soft_time_fraction: 0.5,
     predicted_next_ms: 100,
     ebf_gate_override: false,
+    clock_check_interval: 256,
     elapsed_ms: 10,
     timed_out: false,
     lines: [{ score_cp: 20, moves: ["e2e4"] }],

@@ -84,7 +84,8 @@ CI (`.github/workflows/ci.yml`) runs, in order: `cargo fmt --check`, `cargo clip
   not auto-rebuilt by `npm run check` or `npm test`.
 - `engine/Cargo.toml`'s `[profile.release]` (`codegen-units = 1`, `lto =
   "fat"`, `panic = "abort"`, `strip = true`) plus `wasm-opt -O
-  --enable-bulk-memory` on the `wasm-pack` output are what keep the binary
+  --enable-bulk-memory --enable-nontrapping-float-to-int` on the `wasm-pack`
+  output are what keep the binary
   small and fast in-browser; `bench:engine` reports the resulting Wasm size
   alongside search speed so regressions in either are visible together.
 
@@ -104,6 +105,9 @@ CI (`.github/workflows/ci.yml`) runs, in order: `cargo fmt --check`, `cargo clip
   factor. Before another timed depth starts, callers compare Rust's predicted
   cost with remaining hard time (1.25× allowance for single-PV, 1.5× for
   MultiPV); instability overrides this gate.
+- Completed depths calibrate the Rust wall-clock polling interval to about
+  1.5 ms of measured work, clamped to 64–4,096 nodes. The deterministic test
+  node limit remains a per-node check independent of this wall-clock path.
 - Requests carry a monotonically increasing `requestId`; a `cancel` message
   records the highest cancelled id so in-flight/late results from stale
   requests are dropped without needing to kill the loop early. `useEngine.ts`

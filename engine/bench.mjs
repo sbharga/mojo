@@ -47,6 +47,7 @@ function runPosition(name, fen, thinkTimeMs, multiPv) {
       overrun_ms: Math.max(0, wallMs - thinkTimeMs),
       depth: latest?.depth ?? 0,
       nodes: Number(latest?.nodes ?? 0),
+      clock_interval: latest?.clock_check_interval ?? null,
       best_move: latest?.lines[0]?.moves[0] ?? null,
       score_cp: latest?.lines[0]?.score_cp ?? null,
     }
