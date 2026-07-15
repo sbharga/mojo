@@ -6,7 +6,7 @@ use cozy_chess::{
 use crate::eval_tuned::DELTAS;
 
 #[cfg(feature = "tuning")]
-pub(crate) const PARAMETER_COUNT: usize = 828;
+pub(crate) const PARAMETER_COUNT: usize = 855;
 const MG_VALUE_START: usize = 0;
 const EG_VALUE_START: usize = 6;
 const MG_PST_START: usize = 12;
@@ -21,24 +21,24 @@ const ROOK_OPEN_MG: usize = 786;
 const ROOK_OPEN_EG: usize = 787;
 const ROOK_SEMI_OPEN_MG: usize = 788;
 const ROOK_SEMI_OPEN_EG: usize = 789;
-const KING_SHIELD_MG: usize = 790;
-const TEMPO: usize = 791;
-const MOP_EDGE: usize = 792;
-const MOP_KING: usize = 793;
-const ROOK_CONFINEMENT: usize = 794;
-const BN_CORNER: usize = 795;
-const MOBILITY_START: usize = 796;
-const KING_ZONE_START: usize = 800;
-const MG_PASSER_START: usize = 804;
-const EG_PASSER_START: usize = 812;
-const PASSER_OWN_KING: usize = 820;
-const PASSER_ENEMY_KING: usize = 821;
-const PAWN_THREAT_MG: usize = 822;
-const PAWN_THREAT_EG: usize = 823;
-const MINOR_MAJOR_THREAT_MG: usize = 824;
-const MINOR_MAJOR_THREAT_EG: usize = 825;
-const HANGING_THREAT_MG: usize = 826;
-const HANGING_THREAT_EG: usize = 827;
+const TEMPO: usize = 790;
+const MOP_EDGE: usize = 791;
+const MOP_KING: usize = 792;
+const ROOK_CONFINEMENT: usize = 793;
+const BN_CORNER: usize = 794;
+const MOBILITY_START: usize = 795;
+const KING_ATTACK_CURVE_START: usize = 799;
+const KING_ATTACK_CURVE_LEN: usize = 32;
+const MG_PASSER_START: usize = 831;
+const EG_PASSER_START: usize = 839;
+const PASSER_OWN_KING: usize = 847;
+const PASSER_ENEMY_KING: usize = 848;
+const PAWN_THREAT_MG: usize = 849;
+const PAWN_THREAT_EG: usize = 850;
+const MINOR_MAJOR_THREAT_MG: usize = 851;
+const MINOR_MAJOR_THREAT_EG: usize = 852;
+const HANGING_THREAT_MG: usize = 853;
+const HANGING_THREAT_EG: usize = 854;
 
 fn tuned(base: i32, parameter: usize) -> i32 {
     base + i32::from(DELTAS[parameter])
@@ -66,7 +66,6 @@ const ROOK_OPEN_FILE_BONUS_MG: i32 = 20;
 const ROOK_OPEN_FILE_BONUS_EG: i32 = 10;
 const ROOK_SEMI_OPEN_FILE_BONUS_MG: i32 = 10;
 const ROOK_SEMI_OPEN_FILE_BONUS_EG: i32 = 5;
-const KING_SHIELD_PAWN_BONUS_MG: i32 = 9;
 const TEMPO_BONUS: i32 = 10;
 // Bare-king mating guidance. These terms give shallow searches a useful
 // gradient in endings where material alone cannot distinguish progress.
@@ -79,12 +78,11 @@ const KNIGHT_MOBILITY_WEIGHT: i32 = 4;
 const BISHOP_MOBILITY_WEIGHT: i32 = 4;
 const ROOK_MOBILITY_WEIGHT: i32 = 2;
 const QUEEN_MOBILITY_WEIGHT: i32 = 1;
-// King-zone attacker bonus per square a piece attacks within the enemy king's
-// own square plus its 8 neighbors (tropism), by piece.
-const KING_ZONE_KNIGHT_WEIGHT_MG: i32 = 3;
-const KING_ZONE_BISHOP_WEIGHT_MG: i32 = 3;
-const KING_ZONE_ROOK_WEIGHT_MG: i32 = 2;
-const KING_ZONE_QUEEN_WEIGHT_MG: i32 = 4;
+// Nonlinear king-danger score indexed by accumulated attack units.
+const KING_ATTACK_CURVE: [i32; KING_ATTACK_CURVE_LEN] = [
+    0, 0, 0, 1, 2, 4, 7, 11, 16, 22, 29, 37, 46, 56, 67, 79, 92, 106, 121, 137, 154, 172, 191, 211,
+    232, 254, 277, 301, 326, 352, 379, 407,
+];
 // Passed-pawn bonus by rank relative to the pawn's own side (0 = own back rank).
 const MG_PASSER: [i32; 8] = [0, 5, 10, 20, 35, 60, 100, 0];
 const EG_PASSER: [i32; 8] = [0, 10, 20, 40, 70, 120, 200, 0];
@@ -221,6 +219,9 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
     ];
     let mut all_attacks = pawn_attacks;
     let mut minor_attacks = [BitBoard::EMPTY; 2];
+    let mut king_attack_units = [0_i32; 2];
+    let mut king_attackers = [0_i32; 2];
+    let mut king_zone_attacks = [BitBoard::EMPTY; 2];
 
     for piece in Piece::ALL {
         for color in [Color::White, Color::Black] {
@@ -276,15 +277,18 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
                 mg += sign * mobility;
                 eg += sign * mobility;
 
-                let (king_zone_weight, king_zone_parameter) = match piece {
-                    Piece::Knight => (KING_ZONE_KNIGHT_WEIGHT_MG, KING_ZONE_START),
-                    Piece::Bishop => (KING_ZONE_BISHOP_WEIGHT_MG, KING_ZONE_START + 1),
-                    Piece::Rook => (KING_ZONE_ROOK_WEIGHT_MG, KING_ZONE_START + 2),
-                    Piece::Queen => (KING_ZONE_QUEEN_WEIGHT_MG, KING_ZONE_START + 3),
+                let attack_units = match piece {
+                    Piece::Knight | Piece::Bishop => 2,
+                    Piece::Rook => 3,
+                    Piece::Queen => 5,
                     _ => unreachable!("only sliding and leaping pieces have attacks"),
                 };
-                let zone_hits = (raw_attacks & king_zone[!color as usize]).len() as i32;
-                mg += sign * zone_hits * tuned(king_zone_weight, king_zone_parameter);
+                let zone_hits = raw_attacks & king_zone[!color as usize];
+                if !zone_hits.is_empty() {
+                    king_attack_units[color as usize] += attack_units;
+                    king_attackers[color as usize] += 1;
+                    king_zone_attacks[color as usize] |= zone_hits;
+                }
             }
         }
     }
@@ -302,6 +306,16 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
             enemy,
             enemy_majors,
         );
+        let undefended_zone =
+            (king_zone_attacks[color as usize] & !all_attacks[!color as usize]).len() as i32;
+        let shield = king_shield_pawns(board, !color);
+        let units = king_danger_units(
+            king_attack_units[color as usize],
+            king_attackers[color as usize],
+            undefended_zone,
+            shield,
+        );
+        mg += sign * tuned(KING_ATTACK_CURVE[units], KING_ATTACK_CURVE_START + units);
         mg += sign
             * (pawn_targets * tuned(PAWN_THREAT_BONUS_MG, PAWN_THREAT_MG)
                 + minor_major_targets * tuned(MINOR_MAJOR_THREAT_BONUS_MG, MINOR_MAJOR_THREAT_MG)
@@ -355,24 +369,6 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
                     };
             }
         }
-
-        let king = board.king(color);
-        let king_rank = king.rank() as i32;
-        let shield_rank = king_rank + if color == Color::White { 1 } else { -1 };
-        if (0..8).contains(&shield_rank) {
-            for file_delta in -1..=1 {
-                let file = king.file() as i32 + file_delta;
-                if (0..8).contains(&file) {
-                    let square =
-                        Square::new(File::ALL[file as usize], Rank::ALL[shield_rank as usize]);
-                    if board.piece_on(square) == Some(Piece::Pawn)
-                        && board.color_on(square) == Some(color)
-                    {
-                        mg += sign * tuned(KING_SHIELD_PAWN_BONUS_MG, KING_SHIELD_MG);
-                    }
-                }
-            }
-        }
     }
 
     // Once one side has only a king, reward the winning side for taking away
@@ -401,6 +397,25 @@ fn pawn_attacks(board: &Board, color: Color) -> BitBoard {
         })
 }
 
+fn king_shield_pawns(board: &Board, color: Color) -> i32 {
+    let king = board.king(color);
+    let shield_rank = king.rank() as i32 + if color == Color::White { 1 } else { -1 };
+    if !(0..8).contains(&shield_rank) {
+        return 0;
+    }
+    (-1..=1)
+        .filter_map(|file_delta| {
+            let file = king.file() as i32 + file_delta;
+            (0..8)
+                .contains(&file)
+                .then(|| Square::new(File::ALL[file as usize], Rank::ALL[shield_rank as usize]))
+        })
+        .filter(|&square| {
+            board.piece_on(square) == Some(Piece::Pawn) && board.color_on(square) == Some(color)
+        })
+        .count() as i32
+}
+
 fn safe_mobility(raw_attacks: BitBoard, own: BitBoard, enemy_pawn_attacks: BitBoard) -> i32 {
     (raw_attacks & !own & !enemy_pawn_attacks).len() as i32
 }
@@ -418,6 +433,11 @@ fn threat_counts(
         (minor_attacks & enemy_majors).len() as i32,
         (all_attacks & enemy & !enemy_defenses).len() as i32,
     ]
+}
+
+fn king_danger_units(base_units: i32, attackers: i32, undefended: i32, shield: i32) -> usize {
+    (base_units + 2 * attackers.saturating_sub(1) + 2 * undefended - 2 * shield)
+        .clamp(0, (KING_ATTACK_CURVE_LEN - 1) as i32) as usize
 }
 
 fn bare_king_mating_bonus(board: &Board, attacker: Color) -> i32 {
@@ -545,6 +565,15 @@ mod evaluation_tests {
             [1, 1, 2]
         );
     }
+
+    #[test]
+    fn king_danger_compounds_attackers_and_is_reduced_by_the_pawn_shield() {
+        let lone_attacker = king_danger_units(2, 1, 0, 0);
+        let coordinated_attack = king_danger_units(9, 3, 2, 0);
+        let shielded_attack = king_danger_units(9, 3, 2, 3);
+        assert!(KING_ATTACK_CURVE[coordinated_attack] > 3 * KING_ATTACK_CURVE[lone_attacker]);
+        assert!(KING_ATTACK_CURVE[shielded_attack] < KING_ATTACK_CURVE[coordinated_attack]);
+    }
 }
 
 #[cfg(feature = "tuning")]
@@ -648,7 +677,6 @@ pub mod tuning {
             ROOK_OPEN_FILE_BONUS_EG,
             ROOK_SEMI_OPEN_FILE_BONUS_MG,
             ROOK_SEMI_OPEN_FILE_BONUS_EG,
-            KING_SHIELD_PAWN_BONUS_MG,
             TEMPO_BONUS,
             MOP_UP_EDGE_WEIGHT,
             MOP_UP_KING_WEIGHT,
@@ -658,16 +686,13 @@ pub mod tuning {
             BISHOP_MOBILITY_WEIGHT,
             ROOK_MOBILITY_WEIGHT,
             QUEEN_MOBILITY_WEIGHT,
-            KING_ZONE_KNIGHT_WEIGHT_MG,
-            KING_ZONE_BISHOP_WEIGHT_MG,
-            KING_ZONE_ROOK_WEIGHT_MG,
-            KING_ZONE_QUEEN_WEIGHT_MG,
         ]
         .into_iter()
         .enumerate()
         {
             weights[DOUBLED_MG + index] = value;
         }
+        weights[KING_ATTACK_CURVE_START..MG_PASSER_START].copy_from_slice(&KING_ATTACK_CURVE);
         weights[MG_PASSER_START..EG_PASSER_START].copy_from_slice(&MG_PASSER);
         weights[EG_PASSER_START..PASSER_OWN_KING].copy_from_slice(&EG_PASSER);
         weights[PASSER_OWN_KING] = PASSER_OWN_KING_DIST_WEIGHT_EG;
@@ -696,6 +721,9 @@ pub mod tuning {
         ];
         let mut all_attacks = pawn_attacks;
         let mut minor_attacks = [BitBoard::EMPTY; 2];
+        let mut king_attack_units = [0_i32; 2];
+        let mut king_attackers = [0_i32; 2];
+        let mut king_zone_attacks = [BitBoard::EMPTY; 2];
         let mut phase = 0;
 
         for piece in Piece::ALL {
@@ -743,8 +771,18 @@ pub mod tuning {
                         );
                         mg[MOBILITY_START + offset] += sign * mobility;
                         eg[MOBILITY_START + offset] += sign * mobility;
-                        let zone_hits = (raw_attacks & king_zone[!color as usize]).len() as i32;
-                        mg[KING_ZONE_START + offset] += sign * zone_hits;
+                        let attack_units = match piece {
+                            Piece::Knight | Piece::Bishop => 2,
+                            Piece::Rook => 3,
+                            Piece::Queen => 5,
+                            _ => unreachable!(),
+                        };
+                        let zone_hits = raw_attacks & king_zone[!color as usize];
+                        if !zone_hits.is_empty() {
+                            king_attack_units[color as usize] += attack_units;
+                            king_attackers[color as usize] += 1;
+                            king_zone_attacks[color as usize] |= zone_hits;
+                        }
                     }
                 }
             }
@@ -763,6 +801,15 @@ pub mod tuning {
                 enemy,
                 enemy_majors,
             );
+            let undefended_zone =
+                (king_zone_attacks[color as usize] & !all_attacks[!color as usize]).len() as i32;
+            let units = super::king_danger_units(
+                king_attack_units[color as usize],
+                king_attackers[color as usize],
+                undefended_zone,
+                super::king_shield_pawns(board, !color),
+            );
+            mg[KING_ATTACK_CURVE_START + units] += sign;
             mg[PAWN_THREAT_MG] += sign * pawn_targets;
             eg[PAWN_THREAT_EG] += sign * pawn_targets;
             mg[MINOR_MAJOR_THREAT_MG] += sign * minor_major_targets;
@@ -851,22 +898,6 @@ pub mod tuning {
                 } else {
                     mg[ROOK_OPEN_MG] += sign;
                     eg[ROOK_OPEN_EG] += sign;
-                }
-            }
-        }
-        let king = board.king(color);
-        let shield_rank = king.rank() as i32 + if color == Color::White { 1 } else { -1 };
-        if (0..8).contains(&shield_rank) {
-            for file_delta in -1..=1 {
-                let file = king.file() as i32 + file_delta;
-                if (0..8).contains(&file) {
-                    let square =
-                        Square::new(File::ALL[file as usize], Rank::ALL[shield_rank as usize]);
-                    if board.piece_on(square) == Some(Piece::Pawn)
-                        && board.color_on(square) == Some(color)
-                    {
-                        mg[KING_SHIELD_MG] += sign;
-                    }
                 }
             }
         }
