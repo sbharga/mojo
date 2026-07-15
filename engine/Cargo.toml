@@ -13,11 +13,18 @@ crate-type = ["cdylib", "rlib"]
 default = []
 tuning = []
 spsa = []
+book = []
+bookgen = []
 
 [[bin]]
 name = "texel"
 path = "src/bin/texel.rs"
 required-features = ["tuning"]
+
+[[bin]]
+name = "bookgen"
+path = "src/bin/bookgen.rs"
+required-features = ["bookgen"]
 
 [dependencies]
 arrayvec = "0.7"

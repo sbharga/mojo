@@ -114,6 +114,21 @@ See [`engine/SPSA.md`](engine/SPSA.md) for parameter bounds, checkpointing,
 and reproducibility details. Treat the tuned values as candidates: require a
 fresh equal-time SPRT before changing the production defaults.
 
+An optional 20 KiB embedded opening book is generated from the same licensed
+ECO corpus. It covers the first 10 plies with one to three weighted replies per
+position; book builds return a vetted move immediately and add small
+game-to-game variety. The ordinary build remains bookless:
+
+```bash
+node engine/generate-book.mjs /path/to/eco.pgn
+npm --prefix web run build:book
+npm --prefix web run test:book
+```
+
+The generator verifies the recorded source hash and every move with both
+`chess.js` and the Rust rules engine. Re-run `build:engine` after experimenting
+with the optional variant to restore the checked-in minimal artifacts.
+
 The micro-NNUE tradeoff and the measurable gates for revisiting it are recorded
 in [`engine/NNUE_DECISION.md`](engine/NNUE_DECISION.md). The production build
 continues to use the HCE until a trained network clears those size, speed,

@@ -18,6 +18,7 @@ declare module "../../../engine/pkg/mojo_engine.js" {
       timeLimitMs: number,
     ): AnalysisResult;
     fallback_move(): string | undefined;
+    book_move?(seed: number): string | undefined;
     free(): void;
   }
   interface AnalysisLine {
