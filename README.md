@@ -65,6 +65,19 @@ supply enough independent opening pairs for the reported SPRT to reach a
 boundary. A `continue testing` result is inconclusive. The baseline and
 candidate must share the current generated JS ABI.
 
+For reproducible Texel tuning, add `--training-output /tmp/mojo-positions.tsv`
+to a representative self-play match, then fit the evaluator's 822 linear
+weights and emit a generated delta table:
+
+```bash
+npm --prefix web run tune:eval -- /tmp/mojo-positions.tsv
+cargo test --manifest-path engine/Cargo.toml --features tuning
+```
+
+The fitter rejects tactical positions, deduplicates positions by Zobrist hash,
+averages conflicting game results, reserves a deterministic validation split,
+and records the input hash in the generated source.
+
 ## Architecture
 
 - `engine/` is the Rust search engine and Wasm boundary.
