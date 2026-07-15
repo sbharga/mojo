@@ -138,6 +138,8 @@ pub(crate) struct SearchResult {
     pub(crate) nodes: u64,
     pub(crate) root_node_fraction: f64,
     pub(crate) soft_time_fraction: f64,
+    pub(crate) predicted_next_ms: f64,
+    pub(crate) ebf_gate_override: bool,
     pub(crate) timed_out: bool,
     pub(crate) lines: Vec<SearchLine>,
 }
@@ -163,6 +165,8 @@ pub(crate) struct SearchCore {
     previous_best_move: Option<Move>,
     previous_iteration_score: Option<i32>,
     stable_best_iterations: u8,
+    previous_iteration_ms: Option<f64>,
+    smoothed_ebf: Option<f64>,
     root_key: u64,
     generation: u8,
     nodes: u64,
@@ -206,6 +210,8 @@ impl SearchCore {
             previous_best_move: None,
             previous_iteration_score: None,
             stable_best_iterations: 0,
+            previous_iteration_ms: None,
+            smoothed_ebf: None,
             root_key: 0,
             generation: 0,
             nodes: 0,
@@ -230,6 +236,8 @@ impl SearchCore {
             self.previous_best_move = None;
             self.previous_iteration_score = None;
             self.stable_best_iterations = 0;
+            self.previous_iteration_ms = None;
+            self.smoothed_ebf = None;
             self.generation = self.generation.wrapping_add(1);
             for row in &mut self.history {
                 for value in row {
@@ -264,6 +272,7 @@ impl SearchCore {
         multi_pv: u8,
         time_limit_ms: f64,
     ) -> SearchResult {
+        let iteration_started = crate::now_ms();
         self.nodes = 0;
         self.timed_out = false;
         #[cfg(test)]
@@ -282,6 +291,8 @@ impl SearchCore {
                 nodes: 0,
                 root_node_fraction: 0.0,
                 soft_time_fraction: 0.5,
+                predicted_next_ms: 0.0,
+                ebf_gate_override: false,
                 timed_out: false,
                 lines: Vec::new(),
             };
@@ -342,10 +353,18 @@ impl SearchCore {
             (!self.timed_out).then(|| lines.first()).flatten(),
             root_node_fraction,
         );
+        let ebf_gate_override = soft_time_fraction >= 0.8;
+        let predicted_next_ms = if !self.timed_out && !lines.is_empty() {
+            self.predict_next_iteration(crate::now_ms() - iteration_started)
+        } else {
+            0.0
+        };
         SearchResult {
             nodes: self.nodes,
             root_node_fraction,
             soft_time_fraction,
+            predicted_next_ms,
+            ebf_gate_override,
             timed_out: self.timed_out,
             lines,
         }
@@ -1223,6 +1242,21 @@ impl SearchCore {
         fraction.clamp(0.25, 0.9)
     }
 
+    fn predict_next_iteration(&mut self, elapsed_ms: f64) -> f64 {
+        let Some(previous_ms) = self.previous_iteration_ms.replace(elapsed_ms) else {
+            return 0.0;
+        };
+        if previous_ms <= 0.0 || elapsed_ms <= 0.0 {
+            return 0.0;
+        }
+        let recent_ebf = (elapsed_ms / previous_ms).clamp(1.0, 8.0);
+        let smoothed = self
+            .smoothed_ebf
+            .map_or(recent_ebf, |previous| 0.6 * previous + 0.4 * recent_ebf);
+        self.smoothed_ebf = Some(smoothed);
+        elapsed_ms * smoothed
+    }
+
     fn store(
         &mut self,
         key: u64,
@@ -1799,5 +1833,16 @@ mod tests {
 
         let mut scattered = SearchCore::new();
         assert_eq!(scattered.update_time_management(Some(&first), 0.2), 0.7);
+    }
+
+    #[test]
+    fn iteration_prediction_smooths_and_bounds_effective_branching_factor() {
+        let mut search = SearchCore::new();
+        assert_eq!(search.predict_next_iteration(10.0), 0.0);
+        assert_eq!(search.predict_next_iteration(20.0), 40.0);
+        assert_eq!(search.predict_next_iteration(40.0), 80.0);
+        // A single 10x outlier is clamped to 8x and blended 40/60 with the
+        // prior 2x estimate: 0.6*2 + 0.4*8 = 4.4.
+        assert!((search.predict_next_iteration(400.0) - 1_760.0).abs() < 1.0e-9);
     }
 }

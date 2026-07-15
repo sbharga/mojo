@@ -100,6 +100,10 @@ CI (`.github/workflows/ci.yml`) runs, in order: `cargo fmt --check`, `cargo clip
   The worker, benchmark, and timed self-play stop between iterations at that
   soft fraction; the existing Rust deadline remains the non-negotiable hard
   limit inside an iteration.
+- Completed iteration times also feed a bounded, smoothed effective branching
+  factor. Before another timed depth starts, callers compare Rust's predicted
+  cost with remaining hard time (1.25× allowance for single-PV, 1.5× for
+  MultiPV); instability overrides this gate.
 - Requests carry a monotonically increasing `requestId`; a `cancel` message
   records the highest cancelled id so in-flight/late results from stale
   requests are dropped without needing to kill the loop early. `useEngine.ts`

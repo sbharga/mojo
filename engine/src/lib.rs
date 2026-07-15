@@ -30,6 +30,8 @@ struct AnalysisResult {
     nodes: u64,
     root_node_fraction: f64,
     soft_time_fraction: f64,
+    predicted_next_ms: f64,
+    ebf_gate_override: bool,
     elapsed_ms: f64,
     timed_out: bool,
     lines: Vec<PrincipalVariation>,
@@ -128,6 +130,8 @@ fn run_analysis(
         nodes: result.nodes,
         root_node_fraction: result.root_node_fraction,
         soft_time_fraction: result.soft_time_fraction,
+        predicted_next_ms: result.predicted_next_ms,
+        ebf_gate_override: result.ebf_gate_override,
         elapsed_ms: now_ms() - start,
         timed_out: result.timed_out,
         lines: result

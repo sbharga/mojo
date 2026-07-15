@@ -31,6 +31,12 @@ function runPosition(name, fen, thinkTimeMs, multiPv) {
         && performance.now() - started
           >= thinkTimeMs * (result.soft_time_fraction ?? 0.5)
       ) break
+      const nextRemaining = thinkTimeMs - (performance.now() - started)
+      const predictionSafety = multiPv > 1 ? 1.5 : 1.25
+      if (
+        !(result.ebf_gate_override ?? false)
+        && (result.predicted_next_ms ?? 0) > nextRemaining * predictionSafety
+      ) break
     }
     const wallMs = Math.round(performance.now() - started)
     return {

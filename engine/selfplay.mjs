@@ -201,6 +201,10 @@ function search(engine, fen, priorFens, options) {
       && performance.now() - started
         >= options.moveTimeMs * (result.soft_time_fraction ?? 0.5)
     ) break
+    if (options.moveTimeMs !== undefined && !(result.ebf_gate_override ?? false)) {
+      const nextRemaining = options.moveTimeMs - (performance.now() - started)
+      if ((result.predicted_next_ms ?? 0) > nextRemaining * 1.25) break
+    }
   }
   const line = completed?.lines[0]
   const move = line?.moves[0] ?? engine.fallback_move()
