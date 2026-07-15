@@ -73,6 +73,12 @@ async function analyze(request: AnalyzeRequest) {
         && performance.now() - started
           >= request.thinkTimeMs * result.soft_time_fraction
       ) break;
+      const nextRemaining = request.thinkTimeMs - (performance.now() - started);
+      const predictionSafety = multiPv > 1 ? 1.5 : 1.25;
+      if (
+        !result.ebf_gate_override
+        && result.predicted_next_ms > nextRemaining * predictionSafety
+      ) break;
       depth += 1;
       // Each analyze_depth call is a single synchronous, uninterruptible Wasm
       // call, so this loop must yield back to the event loop between depths.
@@ -93,6 +99,8 @@ async function analyze(request: AnalyzeRequest) {
           nodes: 0,
           root_node_fraction: 1,
           soft_time_fraction: 1,
+          predicted_next_ms: 0,
+          ebf_gate_override: false,
           elapsed_ms: performance.now() - started,
           timed_out: true,
           lines: [{ score_cp: 0, moves: [move] }],

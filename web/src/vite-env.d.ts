@@ -29,6 +29,8 @@ declare module "../../../engine/pkg/mojo_engine.js" {
     nodes: number;
     root_node_fraction: number;
     soft_time_fraction: number;
+    predicted_next_ms: number;
+    ebf_gate_override: boolean;
     elapsed_ms: number;
     timed_out: boolean;
     lines: AnalysisLine[];
