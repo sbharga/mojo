@@ -75,6 +75,9 @@ CI (`.github/workflows/ci.yml`) runs, in order: `cargo fmt --check`, `cargo clip
   bitbase once when the first search core is constructed. Exact draws bypass
   search evaluation; wins receive a decisive score plus the normal progress
   gradient.
+- `engine/NNUE_DECISION.md` records why the production evaluator remains HCE
+  and the data, reproducibility, Wasm-size, speed, correctness, and SPRT gates
+  a future micro-NNUE must clear.
 - `engine/pkg/` is the **generated** `wasm-pack` output (JS glue + `.wasm`
   binary) that `web/` imports directly — it is committed and must be
   regenerated (`npm run build:engine`) after any `engine/src` change; it is

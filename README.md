@@ -78,6 +78,11 @@ The fitter rejects tactical positions, deduplicates positions by Zobrist hash,
 averages conflicting game results, reserves a deterministic validation split,
 and records the input hash in the generated source.
 
+The micro-NNUE tradeoff and the measurable gates for revisiting it are recorded
+in [`engine/NNUE_DECISION.md`](engine/NNUE_DECISION.md). The production build
+continues to use the HCE until a trained network clears those size, speed,
+licensing, correctness, and fixed-time strength gates.
+
 ## Architecture
 
 - `engine/` is the Rust search engine and Wasm boundary.
