@@ -46,6 +46,7 @@ const NULL_MOVE_DEPTH_DIVISOR: i16 = 4;
 const NULL_MOVE_HALFMOVE_LIMIT: u8 = 90;
 /// Null-move pruning only applies from this depth onward.
 const NULL_MOVE_MIN_DEPTH: i16 = 3;
+const NULL_VERIFICATION_MIN_DEPTH: i16 = 10;
 /// Late move reduction only applies from this depth and move index onward,
 /// with a deeper reduction once both a higher depth and move index are hit.
 const LMR_MIN_DEPTH: i16 = 3;
@@ -151,6 +152,8 @@ pub(crate) struct SearchCore {
     timed_out: bool,
     #[cfg(test)]
     node_limit: Option<u64>,
+    #[cfg(test)]
+    null_verifications: u64,
 }
 
 impl SearchCore {
@@ -182,6 +185,8 @@ impl SearchCore {
             timed_out: false,
             #[cfg(test)]
             node_limit: None,
+            #[cfg(test)]
+            null_verifications: 0,
         }
     }
 
@@ -295,7 +300,8 @@ impl SearchCore {
         let tt_best = self
             .probe(key)
             .and_then(|entry| self.valid_tt_move(board, entry));
-        let mut picker = MovePicker::new(board, tt_best, self.killers[0], None, None, excluded);
+        let mut picker =
+            MovePicker::new(board, tt_best, self.killers[0], None, None, None, excluded);
         self.pv_len[0] = 0;
         let mut best_score = -INF;
         let mut best_move = None;
@@ -319,6 +325,7 @@ impl SearchCore {
                     0,
                     Some(mv),
                     None,
+                    None,
                 )
             } else {
                 let mut probe = -self.negamax(
@@ -332,6 +339,7 @@ impl SearchCore {
                     0,
                     Some(mv),
                     None,
+                    None,
                 );
                 if probe > alpha && probe < beta && !self.timed_out {
                     probe = -self.negamax(
@@ -344,6 +352,7 @@ impl SearchCore {
                         true,
                         0,
                         Some(mv),
+                        None,
                         None,
                     );
                 }
@@ -408,6 +417,7 @@ impl SearchCore {
         extensions: u8,
         prev_move: Option<Move>,
         excluded_move: Option<Move>,
+        ordering_threat: Option<Move>,
     ) -> i32 {
         self.nodes += 1;
         self.pv_len[ply.min(MAX_PLY - 1)] = 0;
@@ -465,6 +475,7 @@ impl SearchCore {
             depth -= 1;
         }
 
+        let mut threat_move = None;
         if allow_null
             && !pv_node
             && !in_check
@@ -478,7 +489,7 @@ impl SearchCore {
             let previous_null_boundary = self.null_boundary;
             self.null_boundary = Some(self.path.len());
             self.path.push(repetition_key(&null_board));
-            let score = -self.negamax(
+            let null_score = -self.negamax(
                 &null_board,
                 depth - 1 - reduction,
                 -beta,
@@ -489,18 +500,48 @@ impl SearchCore {
                 next_extensions,
                 None,
                 None,
+                None,
             );
+            let null_threat = self.null_threat(&null_board, ply + 1);
             self.path.pop();
             self.null_boundary = previous_null_boundary;
             if self.timed_out {
                 return 0;
             }
-            if score >= beta {
-                return if board.generate_moves(|_| true) {
-                    score
+            if null_score >= beta {
+                if requires_null_verification(depth) {
+                    #[cfg(test)]
+                    {
+                        self.null_verifications += 1;
+                    }
+                    let verification_score = self.negamax(
+                        board,
+                        depth - reduction,
+                        beta - 1,
+                        beta,
+                        ply,
+                        true,
+                        false,
+                        next_extensions,
+                        prev_move,
+                        None,
+                        ordering_threat,
+                    );
+                    if self.timed_out {
+                        return 0;
+                    }
+                    if verification_score >= beta {
+                        return verification_score;
+                    }
                 } else {
-                    0
-                };
+                    return if board.generate_moves(|_| true) {
+                        null_score
+                    } else {
+                        0
+                    };
+                }
+            } else {
+                threat_move = null_threat;
             }
         }
 
@@ -573,6 +614,7 @@ impl SearchCore {
                 next_extensions,
                 prev_move,
                 Some(tt_move),
+                ordering_threat,
             );
             if self.timed_out {
                 return 0;
@@ -594,6 +636,7 @@ impl SearchCore {
             tt_best,
             self.killers[ply],
             countermove,
+            ordering_threat,
             prev_move,
             excluded_move.as_slice(),
         );
@@ -612,6 +655,8 @@ impl SearchCore {
             let child = played(board, mv);
             let gives_check = !child.checkers().is_empty();
             let quiet = !capture && mv.promotion.is_none();
+            let defends_threat = quiet
+                && threat_move.is_some_and(|threat| defends_against_threat(board, &child, threat));
             let quiet_history = if quiet {
                 self.quiet_history_score(board, mv, prev_move)
             } else {
@@ -623,7 +668,13 @@ impl SearchCore {
                 0
             };
 
-            if !pv_node && !in_check && excluded_move.is_none() && move_index > 0 && !gives_check {
+            if !pv_node
+                && !in_check
+                && excluded_move.is_none()
+                && move_index > 0
+                && !gives_check
+                && !defends_threat
+            {
                 if capture
                     && depth <= SEE_PRUNE_MAX_DEPTH
                     && static_exchange(board, mv) < capture_see_threshold(depth, capture_history)
@@ -672,6 +723,7 @@ impl SearchCore {
                     child_extensions,
                     Some(mv),
                     None,
+                    threat_move,
                 );
             } else {
                 let reduction = lmr_reduction(
@@ -699,6 +751,7 @@ impl SearchCore {
                     child_extensions,
                     Some(mv),
                     None,
+                    threat_move,
                 );
                 if reduction > 0 && score > alpha && !self.timed_out {
                     score = -self.negamax(
@@ -712,6 +765,7 @@ impl SearchCore {
                         child_extensions,
                         Some(mv),
                         None,
+                        threat_move,
                     );
                 }
                 if score > alpha && score < beta && !self.timed_out {
@@ -726,6 +780,7 @@ impl SearchCore {
                         child_extensions,
                         Some(mv),
                         None,
+                        threat_move,
                     );
                 }
             }
@@ -975,6 +1030,17 @@ impl SearchCore {
         decode_move(entry.best).filter(|mv| board.is_legal(*mv))
     }
 
+    fn null_threat(&self, board: &Board, ply: usize) -> Option<Move> {
+        let pv_move = (ply < MAX_PLY && self.pv_len[ply] > 0)
+            .then(|| decode_move(self.pv[ply][0]))
+            .flatten()
+            .filter(|mv| board.is_legal(*mv));
+        pv_move.or_else(|| {
+            self.probe(rule_key(board))
+                .and_then(|entry| self.valid_tt_move(board, entry))
+        })
+    }
+
     fn store(
         &mut self,
         key: u64,
@@ -1152,6 +1218,24 @@ fn should_apply_iir(
     exclusion_search: bool,
 ) -> bool {
     depth >= IIR_MIN_DEPTH && !has_tt_move && !exclusion_search && (pv_node || beta == alpha + 1)
+}
+
+fn requires_null_verification(depth: i16) -> bool {
+    depth >= NULL_VERIFICATION_MIN_DEPTH
+}
+
+fn defends_against_threat(board: &Board, child: &Board, threat: Move) -> bool {
+    let Some(null_board) = board.null_move() else {
+        return false;
+    };
+    if !null_board.is_legal(threat) {
+        return false;
+    }
+    if !child.is_legal(threat) {
+        return true;
+    }
+    is_capture(&null_board, threat)
+        && (!is_capture(child, threat) || static_exchange(child, threat) < 0)
 }
 
 fn has_non_pawn_material(board: &Board, color: Color) -> bool {
@@ -1346,6 +1430,32 @@ mod tests {
     }
 
     #[test]
+    fn null_verification_and_threat_defense_are_gated_correctly() {
+        assert!(!requires_null_verification(9));
+        assert!(requires_null_verification(10));
+
+        let board = "r3k3/8/8/8/8/8/8/R3K3 w - - 0 1".parse::<Board>().unwrap();
+        let threat = "a8a1".parse().unwrap();
+        let defense = played(&board, "a1b1".parse().unwrap());
+        let irrelevant = played(&board, "e1f1".parse().unwrap());
+        assert!(defends_against_threat(&board, &defense, threat));
+        assert!(!defends_against_threat(&board, &irrelevant, threat));
+    }
+
+    #[test]
+    fn deep_null_fail_high_runs_a_real_verification_search() {
+        let board = Board::default();
+        let mut search = SearchCore::new();
+        search.path.push(repetition_key(&board));
+
+        search.negamax(
+            &board, 11, -1_001, -1_000, 0, false, true, 0, None, None, None,
+        );
+
+        assert!(search.null_verifications > 0);
+    }
+
+    #[test]
     fn null_move_boundary_excludes_real_history_from_repetition() {
         let board = Board::default().null_move().unwrap();
         let key = repetition_key(&board);
@@ -1383,7 +1493,9 @@ mod tests {
         assert!(legal_moves(&board).is_empty());
         assert!(board.checkers().is_empty());
         assert_eq!(
-            search.negamax(&board, 3, -1_001, -1_000, 0, false, true, 0, None, None,),
+            search.negamax(
+                &board, 3, -1_001, -1_000, 0, false, true, 0, None, None, None,
+            ),
             0
         );
     }

@@ -34,7 +34,7 @@ pub(crate) struct MovePicker<'a> {
     board: &'a Board,
     tt_move: Option<Move>,
     excluded: &'a [Move],
-    special: [Option<Move>; 3],
+    special: [Option<Move>; 4],
     prev_move: Option<Move>,
     special_index: usize,
     stage: Stage,
@@ -47,6 +47,7 @@ impl<'a> MovePicker<'a> {
         tt_move: Option<Move>,
         killers: [Option<Move>; 2],
         countermove: Option<Move>,
+        threat_move: Option<Move>,
         prev_move: Option<Move>,
         excluded: &'a [Move],
     ) -> Self {
@@ -54,7 +55,7 @@ impl<'a> MovePicker<'a> {
             board,
             tt_move,
             excluded,
-            special: [killers[0], killers[1], countermove],
+            special: [killers[0], killers[1], countermove, threat_move],
             prev_move,
             special_index: 0,
             stage: Stage::Tt,
@@ -361,7 +362,7 @@ mod tests {
         let board = Board::default();
         let tt_move = "e2e4".parse().unwrap();
         let search = SearchCore::new();
-        let mut picker = MovePicker::new(&board, Some(tt_move), [None; 2], None, None, &[]);
+        let mut picker = MovePicker::new(&board, Some(tt_move), [None; 2], None, None, None, &[]);
 
         assert_eq!(picker.next(&search), Some(tt_move));
         assert!(picker.scored.is_empty());
@@ -376,7 +377,7 @@ mod tests {
         let search = SearchCore::new();
         let tt_move = "e2a6".parse().unwrap();
         let killers = [Some("e1h1".parse().unwrap()), Some("e1a1".parse().unwrap())];
-        let mut picker = MovePicker::new(&board, Some(tt_move), killers, None, None, &[]);
+        let mut picker = MovePicker::new(&board, Some(tt_move), killers, None, None, None, &[]);
         let mut picked = Vec::new();
         while let Some(mv) = picker.next(&search) {
             picked.push(encode_move(mv));
@@ -386,6 +387,16 @@ mod tests {
         legal.sort_unstable();
 
         assert_eq!(picked, legal);
+    }
+
+    #[test]
+    fn threat_move_is_ordered_before_remaining_quiets() {
+        let board = Board::default();
+        let threat = "e2e4".parse().unwrap();
+        let search = SearchCore::new();
+        let mut picker = MovePicker::new(&board, None, [None; 2], None, Some(threat), None, &[]);
+
+        assert_eq!(picker.next(&search), Some(threat));
     }
 
     #[test]
