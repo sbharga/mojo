@@ -1,7 +1,15 @@
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { Engine, initSync } from './pkg/mojo_engine.js'
 
-const wasmBytes = readFileSync(new URL('./pkg/mojo_engine_bg.wasm', import.meta.url))
+const wasmArgument = process.argv.indexOf('--wasm')
+if (wasmArgument !== -1 && !process.argv[wasmArgument + 1]) {
+  throw new Error('--wasm requires an artifact path')
+}
+const wasmSource = wasmArgument === -1
+  ? new URL('./pkg/mojo_engine_bg.wasm', import.meta.url)
+  : resolve(process.cwd(), process.argv[wasmArgument + 1])
+const wasmBytes = readFileSync(wasmSource)
 initSync({ module: wasmBytes })
 
 // Small, deterministic positions are intentional here. This is a regression
