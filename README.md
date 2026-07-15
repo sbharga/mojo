@@ -51,6 +51,11 @@ The engine build emits baseline and `simd128` Wasm artifacts. The worker uses a
 small `WebAssembly.validate` probe and loads SIMD only on supporting browsers;
 the benchmark reports raw and gzip sizes for both builds.
 
+An optional threaded Lazy SMP build is deliberately gated rather than shipped
+as dead code on the current non-isolated GitHub Pages host. The measured
+baseline, shared-TT safety requirements, mobile limits, and adoption thresholds
+are recorded in [`engine/THREADS_DECISION.md`](engine/THREADS_DECISION.md).
+
 ## Strength testing
 
 `engine/selfplay.mjs` compares two Wasm builds at a fixed iterative-search
