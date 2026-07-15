@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
@@ -21,6 +21,7 @@ const defaults = {
   moveTimeMs: undefined,
   openingLimit: undefined,
   openingsFile: undefined,
+  trainingOutput: undefined,
   winScoreCp: 1200,
   winPlies: 6,
   drawScoreCp: 20,
@@ -37,6 +38,7 @@ Options:
   --move-time-ms <ms>      Equal time per move; overrides fixed depth
   --openings <count>       Limit the number of opening pairs
   --openings-file <path>   JSON opening suite (default: bundled ECO FEN suite)
+  --training-output <path> Write <white result><TAB><FEN> tuning records
   --max-plies <count>      Hard game-length draw limit (default: 200)
   --elo0 <elo>             SPRT null hypothesis (default: 0)
   --elo1 <elo>             SPRT alternative hypothesis (default: 10)
@@ -68,10 +70,14 @@ function parseArgs(argv) {
       usage()
       process.exit(0)
     }
-    if (['--baseline', '--candidate', '--openings-file'].includes(argument)) {
+    if (['--baseline', '--candidate', '--openings-file', '--training-output'].includes(argument)) {
       const value = argv[index + 1]
       if (!value) throw new Error(`${argument} requires a path`)
-      const property = argument === '--openings-file' ? 'openingsFile' : argument.slice(2)
+      const property = argument === '--openings-file'
+        ? 'openingsFile'
+        : argument === '--training-output'
+          ? 'trainingOutput'
+          : argument.slice(2)
       options[property] = value
       index += 1
       continue
@@ -230,10 +236,12 @@ function playGame({ Baseline, Candidate, candidateColor, maxPlies, opening, opti
   let reason = 'maximum plies'
   let winner = null
   let playedPlies = gamePly(game)
+  const trainingFens = []
 
   try {
     while (playedPlies < maxPlies && !game.isGameOver()) {
       const fen = game.fen()
+      trainingFens.push(fen)
       const turn = game.turn()
       const actor = turn === 'w' ? white : black
       const { line, move } = search(actor, fen, priorFens, options)
@@ -284,6 +292,10 @@ function playGame({ Baseline, Candidate, candidateColor, maxPlies, opening, opti
       result: winner === null ? 'draw' : `${winner} wins`,
       reason,
       candidateScore: candidateResult(winner, candidateColor),
+      trainingRows: trainingFens.map((fen) => ({
+        fen,
+        result: winner === 'white' ? 1 : winner === 'black' ? 0 : 0.5,
+      })),
     }
   } finally {
     baseline.free()
@@ -374,7 +386,19 @@ async function main() {
     pairScores.push(first.candidateScore + second.candidateScore)
   }
 
-  console.table(games.map(({ candidateScore: _, ...game }) => game))
+  if (options.trainingOutput) {
+    const rows = games.flatMap((game) => game.trainingRows)
+    const output = [
+      '# Mojo self-play Texel records: white result<TAB>FEN',
+      ...rows.map(({ result, fen }) => `${result}\t${fen}`),
+      '',
+    ].join('\n')
+    const outputPath = resolve(repositoryRoot, options.trainingOutput)
+    writeFileSync(outputPath, output)
+    console.log(`Wrote ${rows.length} training records to ${outputPath}`)
+  }
+
+  console.table(games.map(({ candidateScore: _, trainingRows: __, ...game }) => game))
   const wins = games.filter((game) => game.candidateScore === 1).length
   const draws = games.filter((game) => game.candidateScore === 0.5).length
   const losses = games.length - wins - draws

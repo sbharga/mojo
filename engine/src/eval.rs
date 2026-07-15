@@ -3,6 +3,41 @@ use cozy_chess::{
     get_rook_moves,
 };
 
+use crate::eval_tuned::DELTAS;
+
+#[cfg(feature = "tuning")]
+pub(crate) const PARAMETER_COUNT: usize = 822;
+const MG_VALUE_START: usize = 0;
+const EG_VALUE_START: usize = 6;
+const MG_PST_START: usize = 12;
+const EG_PST_START: usize = 396;
+const DOUBLED_MG: usize = 780;
+const DOUBLED_EG: usize = 781;
+const ISOLATED_MG: usize = 782;
+const ISOLATED_EG: usize = 783;
+const BISHOP_PAIR_MG: usize = 784;
+const BISHOP_PAIR_EG: usize = 785;
+const ROOK_OPEN_MG: usize = 786;
+const ROOK_OPEN_EG: usize = 787;
+const ROOK_SEMI_OPEN_MG: usize = 788;
+const ROOK_SEMI_OPEN_EG: usize = 789;
+const KING_SHIELD_MG: usize = 790;
+const TEMPO: usize = 791;
+const MOP_EDGE: usize = 792;
+const MOP_KING: usize = 793;
+const ROOK_CONFINEMENT: usize = 794;
+const BN_CORNER: usize = 795;
+const MOBILITY_START: usize = 796;
+const KING_ZONE_START: usize = 800;
+const MG_PASSER_START: usize = 804;
+const EG_PASSER_START: usize = 812;
+const PASSER_OWN_KING: usize = 820;
+const PASSER_ENEMY_KING: usize = 821;
+
+fn tuned(base: i32, parameter: usize) -> i32 {
+    base + i32::from(DELTAS[parameter])
+}
+
 // Tapered PeSTO-style piece values (indexed by `Piece as usize`), used only
 // by `evaluate` below. `piece_value` (a separate, phase-independent scale)
 // is used by search.rs for SEE/move-ordering/capture pruning, where a single
@@ -13,9 +48,8 @@ const MG_VALUE: [i32; 6] = [82, 337, 365, 477, 1025, 0];
 const EG_VALUE: [i32; 6] = [94, 281, 297, 512, 936, 0];
 const PHASE: [i32; 6] = [0, 1, 1, 2, 4, 0];
 
-// --- Positional bonus/penalty constants (values intentionally unchanged
-// during cleanup; retuning these is a strength-tuning decision that can't
-// be validated without a self-play/SPRT harness, which this repo lacks) ---
+// Hand-authored base weights. The generated delta table can tune each one
+// without making this compact, readable model into generated source.
 const DOUBLED_PAWN_PENALTY_MG: i32 = 12;
 const DOUBLED_PAWN_PENALTY_EG: i32 = 18;
 const ISOLATED_PAWN_PENALTY_MG: i32 = 10;
@@ -100,8 +134,19 @@ pub(crate) fn evaluate(board: &Board) -> i32 {
                 } else {
                     square as usize
                 };
-                mg += sign * (MG_VALUE[piece as usize] + i32::from(MG_PST[piece as usize][index]));
-                eg += sign * (EG_VALUE[piece as usize] + i32::from(EG_PST[piece as usize][index]));
+                let piece_index = piece as usize;
+                mg += sign
+                    * (tuned(MG_VALUE[piece_index], MG_VALUE_START + piece_index)
+                        + tuned(
+                            i32::from(MG_PST[piece_index][index]),
+                            MG_PST_START + piece_index * 64 + index,
+                        ));
+                eg += sign
+                    * (tuned(EG_VALUE[piece_index], EG_VALUE_START + piece_index)
+                        + tuned(
+                            i32::from(EG_PST[piece_index][index]),
+                            EG_PST_START + piece_index * 64 + index,
+                        ));
                 phase += PHASE[piece as usize];
 
                 let own = board.colors(color);
@@ -115,26 +160,27 @@ pub(crate) fn evaluate(board: &Board) -> i32 {
                     _ => None,
                 };
                 if let Some(raw_attacks) = raw_attacks {
-                    let mobility_weight = match piece {
-                        Piece::Knight => KNIGHT_MOBILITY_WEIGHT,
-                        Piece::Bishop => BISHOP_MOBILITY_WEIGHT,
-                        Piece::Rook => ROOK_MOBILITY_WEIGHT,
-                        Piece::Queen => QUEEN_MOBILITY_WEIGHT,
-                        _ => 0,
+                    let (mobility_weight, mobility_parameter) = match piece {
+                        Piece::Knight => (KNIGHT_MOBILITY_WEIGHT, MOBILITY_START),
+                        Piece::Bishop => (BISHOP_MOBILITY_WEIGHT, MOBILITY_START + 1),
+                        Piece::Rook => (ROOK_MOBILITY_WEIGHT, MOBILITY_START + 2),
+                        Piece::Queen => (QUEEN_MOBILITY_WEIGHT, MOBILITY_START + 3),
+                        _ => unreachable!("only sliding and leaping pieces have attacks"),
                     };
-                    let mobility = (raw_attacks & !own).len() as i32 * mobility_weight;
+                    let mobility = (raw_attacks & !own).len() as i32
+                        * tuned(mobility_weight, mobility_parameter);
                     mg += sign * mobility;
                     eg += sign * mobility;
 
-                    let king_zone_weight = match piece {
-                        Piece::Knight => KING_ZONE_KNIGHT_WEIGHT_MG,
-                        Piece::Bishop => KING_ZONE_BISHOP_WEIGHT_MG,
-                        Piece::Rook => KING_ZONE_ROOK_WEIGHT_MG,
-                        Piece::Queen => KING_ZONE_QUEEN_WEIGHT_MG,
-                        _ => 0,
+                    let (king_zone_weight, king_zone_parameter) = match piece {
+                        Piece::Knight => (KING_ZONE_KNIGHT_WEIGHT_MG, KING_ZONE_START),
+                        Piece::Bishop => (KING_ZONE_BISHOP_WEIGHT_MG, KING_ZONE_START + 1),
+                        Piece::Rook => (KING_ZONE_ROOK_WEIGHT_MG, KING_ZONE_START + 2),
+                        Piece::Queen => (KING_ZONE_QUEEN_WEIGHT_MG, KING_ZONE_START + 3),
+                        _ => unreachable!("only sliding and leaping pieces have attacks"),
                     };
                     let zone_hits = (raw_attacks & king_zone[!color as usize]).len() as i32;
-                    mg += sign * zone_hits * king_zone_weight;
+                    mg += sign * zone_hits * tuned(king_zone_weight, king_zone_parameter);
                 }
             }
         }
@@ -150,8 +196,8 @@ pub(crate) fn evaluate(board: &Board) -> i32 {
         }
         for count in file_counts {
             if count > 1 {
-                mg -= sign * (count - 1) * DOUBLED_PAWN_PENALTY_MG;
-                eg -= sign * (count - 1) * DOUBLED_PAWN_PENALTY_EG;
+                mg -= sign * (count - 1) * tuned(DOUBLED_PAWN_PENALTY_MG, DOUBLED_MG);
+                eg -= sign * (count - 1) * tuned(DOUBLED_PAWN_PENALTY_EG, DOUBLED_EG);
             }
         }
         for pawn in pawns {
@@ -160,8 +206,8 @@ pub(crate) fn evaluate(board: &Board) -> i32 {
             let isolated = (file == 0 || file_counts[(file - 1) as usize] == 0)
                 && (file == 7 || file_counts[(file + 1) as usize] == 0);
             if isolated {
-                mg -= sign * ISOLATED_PAWN_PENALTY_MG;
-                eg -= sign * ISOLATED_PAWN_PENALTY_EG;
+                mg -= sign * tuned(ISOLATED_PAWN_PENALTY_MG, ISOLATED_MG);
+                eg -= sign * tuned(ISOLATED_PAWN_PENALTY_EG, ISOLATED_EG);
             }
             let passed = enemy_pawns.into_iter().all(|enemy| {
                 let close_file = ((enemy.file() as i32) - file).abs() <= 1;
@@ -178,19 +224,20 @@ pub(crate) fn evaluate(board: &Board) -> i32 {
                 } else {
                     7 - rank
                 } as usize;
-                mg += sign * MG_PASSER[relative_rank];
-                eg += sign * EG_PASSER[relative_rank];
+                mg += sign * tuned(MG_PASSER[relative_rank], MG_PASSER_START + relative_rank);
+                eg += sign * tuned(EG_PASSER[relative_rank], EG_PASSER_START + relative_rank);
                 let own_king_dist = chebyshev_distance(board.king(color), pawn);
                 let enemy_king_dist = chebyshev_distance(board.king(!color), pawn);
                 eg += sign
-                    * (enemy_king_dist * PASSER_ENEMY_KING_DIST_WEIGHT_EG
-                        - own_king_dist * PASSER_OWN_KING_DIST_WEIGHT_EG);
+                    * (enemy_king_dist
+                        * tuned(PASSER_ENEMY_KING_DIST_WEIGHT_EG, PASSER_ENEMY_KING)
+                        - own_king_dist * tuned(PASSER_OWN_KING_DIST_WEIGHT_EG, PASSER_OWN_KING));
             }
         }
 
         if board.colored_pieces(color, Piece::Bishop).len() >= 2 {
-            mg += sign * BISHOP_PAIR_BONUS_MG;
-            eg += sign * BISHOP_PAIR_BONUS_EG;
+            mg += sign * tuned(BISHOP_PAIR_BONUS_MG, BISHOP_PAIR_MG);
+            eg += sign * tuned(BISHOP_PAIR_BONUS_EG, BISHOP_PAIR_EG);
         }
         for rook in board.colored_pieces(color, Piece::Rook) {
             let file = rook.file() as usize;
@@ -200,15 +247,15 @@ pub(crate) fn evaluate(board: &Board) -> i32 {
                     .any(|pawn| pawn.file() as usize == file);
                 mg += sign
                     * if enemy_on_file {
-                        ROOK_SEMI_OPEN_FILE_BONUS_MG
+                        tuned(ROOK_SEMI_OPEN_FILE_BONUS_MG, ROOK_SEMI_OPEN_MG)
                     } else {
-                        ROOK_OPEN_FILE_BONUS_MG
+                        tuned(ROOK_OPEN_FILE_BONUS_MG, ROOK_OPEN_MG)
                     };
                 eg += sign
                     * if enemy_on_file {
-                        ROOK_SEMI_OPEN_FILE_BONUS_EG
+                        tuned(ROOK_SEMI_OPEN_FILE_BONUS_EG, ROOK_SEMI_OPEN_EG)
                     } else {
-                        ROOK_OPEN_FILE_BONUS_EG
+                        tuned(ROOK_OPEN_FILE_BONUS_EG, ROOK_OPEN_EG)
                     };
             }
         }
@@ -225,7 +272,7 @@ pub(crate) fn evaluate(board: &Board) -> i32 {
                     if board.piece_on(square) == Some(Piece::Pawn)
                         && board.color_on(square) == Some(color)
                     {
-                        mg += sign * KING_SHIELD_PAWN_BONUS_MG;
+                        mg += sign * tuned(KING_SHIELD_PAWN_BONUS_MG, KING_SHIELD_MG);
                     }
                 }
             }
@@ -243,9 +290,9 @@ pub(crate) fn evaluate(board: &Board) -> i32 {
     phase = phase.min(24);
     let white_score = (mg * phase + eg * (24 - phase)) / 24;
     if board.side_to_move() == Color::White {
-        white_score + TEMPO_BONUS
+        white_score + tuned(TEMPO_BONUS, TEMPO)
     } else {
-        -white_score + TEMPO_BONUS
+        -white_score + tuned(TEMPO_BONUS, TEMPO)
     }
 }
 
@@ -271,7 +318,7 @@ fn bare_king_mating_bonus(board: &Board, attacker: Color) -> i32 {
     let attacking_king = board.king(attacker);
     let defending_king = board.king(defender);
     let king_distance = chebyshev_distance(attacking_king, defending_king);
-    let mut bonus = (7 - king_distance) * MOP_UP_KING_WEIGHT;
+    let mut bonus = (7 - king_distance) * tuned(MOP_UP_KING_WEIGHT, MOP_KING);
 
     if bishop_and_knight {
         let bishop = bishops
@@ -285,13 +332,13 @@ fn bare_king_mating_bonus(board: &Board, attacker: Color) -> i32 {
             .map(|corner| chebyshev_distance(defending_king, corner))
             .min()
             .unwrap_or(7);
-        bonus += (7 - corner_distance) * BN_CORNER_WEIGHT;
+        bonus += (7 - corner_distance) * tuned(BN_CORNER_WEIGHT, BN_CORNER);
     } else {
         let edge_distance = (defending_king.file() as i32)
             .min(7 - defending_king.file() as i32)
             .min(defending_king.rank() as i32)
             .min(7 - defending_king.rank() as i32);
-        bonus += (3 - edge_distance) * MOP_UP_EDGE_WEIGHT;
+        bonus += (3 - edge_distance) * tuned(MOP_UP_EDGE_WEIGHT, MOP_EDGE);
 
         // A rook/queen need not check to make progress: placing it across the
         // king cuts off whole ranks or files. Prefer the smaller resulting box.
@@ -310,7 +357,8 @@ fn bare_king_mating_bonus(board: &Board, attacker: Color) -> i32 {
             } else {
                 7
             };
-            bonus += (7 - file_box.min(rank_box)) * ROOK_CONFINEMENT_WEIGHT;
+            bonus +=
+                (7 - file_box.min(rank_box)) * tuned(ROOK_CONFINEMENT_WEIGHT, ROOK_CONFINEMENT);
         }
     }
     bonus
@@ -344,4 +392,438 @@ pub(crate) fn insufficient_material(board: &Board) -> bool {
         }
     }
     false
+}
+
+#[cfg(feature = "tuning")]
+pub mod tuning {
+    use cozy_chess::{BitBoard, Board, Color, Piece, Rank, Square};
+
+    use super::*;
+
+    pub const PARAMETER_COUNT: usize = super::PARAMETER_COUNT;
+
+    /// Linear coefficients for one position, split so tapered interpolation
+    /// remains identical to the production evaluator.
+    pub struct LinearFeatures {
+        mg: Box<[i32; PARAMETER_COUNT]>,
+        eg: Box<[i32; PARAMETER_COUNT]>,
+        direct: Box<[i32; PARAMETER_COUNT]>,
+        phase: i32,
+        perspective: i32,
+    }
+
+    impl LinearFeatures {
+        pub fn value(&self, weights: &[f64; PARAMETER_COUNT]) -> f64 {
+            let mg = dot_f64(&self.mg, weights);
+            let eg = dot_f64(&self.eg, weights);
+            let direct = dot_f64(&self.direct, weights);
+            self.perspective as f64 * (mg * self.phase as f64 + eg * (24 - self.phase) as f64)
+                / 24.0
+                + direct
+        }
+
+        pub fn add_gradient(&self, gradient: &mut [f64; PARAMETER_COUNT], scale: f64) {
+            let mg_scale = scale * self.perspective as f64 * self.phase as f64 / 24.0;
+            let eg_scale = scale * self.perspective as f64 * (24 - self.phase) as f64 / 24.0;
+            for (index, value) in gradient.iter_mut().enumerate() {
+                *value += mg_scale * self.mg[index] as f64
+                    + eg_scale * self.eg[index] as f64
+                    + scale * self.direct[index] as f64;
+            }
+        }
+
+        #[cfg(test)]
+        fn integer_value(&self, weights: &[i32; PARAMETER_COUNT]) -> i32 {
+            let mg = dot_i32(&self.mg, weights);
+            let eg = dot_i32(&self.eg, weights);
+            self.perspective * (mg * self.phase + eg * (24 - self.phase)) / 24
+                + dot_i32(&self.direct, weights)
+        }
+    }
+
+    fn dot_f64(coefficients: &[i32; PARAMETER_COUNT], weights: &[f64; PARAMETER_COUNT]) -> f64 {
+        coefficients
+            .iter()
+            .zip(weights)
+            .map(|(&coefficient, &weight)| f64::from(coefficient) * weight)
+            .sum()
+    }
+
+    #[cfg(test)]
+    fn dot_i32(coefficients: &[i32; PARAMETER_COUNT], weights: &[i32; PARAMETER_COUNT]) -> i32 {
+        coefficients
+            .iter()
+            .zip(weights)
+            .map(|(&coefficient, &weight)| coefficient * weight)
+            .sum()
+    }
+
+    pub fn base_weights() -> [f64; PARAMETER_COUNT] {
+        base_weights_i32().map(f64::from)
+    }
+
+    pub fn current_weights() -> [f64; PARAMETER_COUNT] {
+        let mut weights = base_weights();
+        for (weight, &delta) in weights.iter_mut().zip(DELTAS.iter()) {
+            *weight += f64::from(delta);
+        }
+        weights
+    }
+
+    pub fn tuned_source_hash() -> u64 {
+        crate::eval_tuned::SOURCE_HASH
+    }
+
+    fn base_weights_i32() -> [i32; PARAMETER_COUNT] {
+        let mut weights = [0; PARAMETER_COUNT];
+        weights[MG_VALUE_START..EG_VALUE_START].copy_from_slice(&MG_VALUE);
+        weights[EG_VALUE_START..MG_PST_START].copy_from_slice(&EG_VALUE);
+        for piece in 0..6 {
+            for square in 0..64 {
+                weights[MG_PST_START + piece * 64 + square] = i32::from(MG_PST[piece][square]);
+                weights[EG_PST_START + piece * 64 + square] = i32::from(EG_PST[piece][square]);
+            }
+        }
+        for (index, value) in [
+            DOUBLED_PAWN_PENALTY_MG,
+            DOUBLED_PAWN_PENALTY_EG,
+            ISOLATED_PAWN_PENALTY_MG,
+            ISOLATED_PAWN_PENALTY_EG,
+            BISHOP_PAIR_BONUS_MG,
+            BISHOP_PAIR_BONUS_EG,
+            ROOK_OPEN_FILE_BONUS_MG,
+            ROOK_OPEN_FILE_BONUS_EG,
+            ROOK_SEMI_OPEN_FILE_BONUS_MG,
+            ROOK_SEMI_OPEN_FILE_BONUS_EG,
+            KING_SHIELD_PAWN_BONUS_MG,
+            TEMPO_BONUS,
+            MOP_UP_EDGE_WEIGHT,
+            MOP_UP_KING_WEIGHT,
+            ROOK_CONFINEMENT_WEIGHT,
+            BN_CORNER_WEIGHT,
+            KNIGHT_MOBILITY_WEIGHT,
+            BISHOP_MOBILITY_WEIGHT,
+            ROOK_MOBILITY_WEIGHT,
+            QUEEN_MOBILITY_WEIGHT,
+            KING_ZONE_KNIGHT_WEIGHT_MG,
+            KING_ZONE_BISHOP_WEIGHT_MG,
+            KING_ZONE_ROOK_WEIGHT_MG,
+            KING_ZONE_QUEEN_WEIGHT_MG,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            weights[DOUBLED_MG + index] = value;
+        }
+        weights[MG_PASSER_START..EG_PASSER_START].copy_from_slice(&MG_PASSER);
+        weights[EG_PASSER_START..PASSER_OWN_KING].copy_from_slice(&EG_PASSER);
+        weights[PASSER_OWN_KING] = PASSER_OWN_KING_DIST_WEIGHT_EG;
+        weights[PASSER_ENEMY_KING] = PASSER_ENEMY_KING_DIST_WEIGHT_EG;
+        weights
+    }
+
+    pub fn extract(board: &Board) -> LinearFeatures {
+        let mut mg = Box::new([0; PARAMETER_COUNT]);
+        let mut eg = Box::new([0; PARAMETER_COUNT]);
+        let mut direct = Box::new([0; PARAMETER_COUNT]);
+        let occupied = board.occupied();
+        let king_zone = [
+            get_king_moves(board.king(Color::White)) | board.king(Color::White).bitboard(),
+            get_king_moves(board.king(Color::Black)) | board.king(Color::Black).bitboard(),
+        ];
+        let mut phase = 0;
+
+        for piece in Piece::ALL {
+            let piece_index = piece as usize;
+            for color in [Color::White, Color::Black] {
+                let sign = color_sign(color);
+                for square in board.colored_pieces(color, piece) {
+                    let square_index = if color == Color::White {
+                        (square as usize) ^ 56
+                    } else {
+                        square as usize
+                    };
+                    mg[MG_VALUE_START + piece_index] += sign;
+                    eg[EG_VALUE_START + piece_index] += sign;
+                    mg[MG_PST_START + piece_index * 64 + square_index] += sign;
+                    eg[EG_PST_START + piece_index * 64 + square_index] += sign;
+                    phase += PHASE[piece_index];
+
+                    let raw_attacks = match piece {
+                        Piece::Knight => Some(get_knight_moves(square)),
+                        Piece::Bishop => Some(get_bishop_moves(square, occupied)),
+                        Piece::Rook => Some(get_rook_moves(square, occupied)),
+                        Piece::Queen => Some(
+                            get_bishop_moves(square, occupied) | get_rook_moves(square, occupied),
+                        ),
+                        _ => None,
+                    };
+                    if let Some(raw_attacks) = raw_attacks {
+                        let offset = match piece {
+                            Piece::Knight => 0,
+                            Piece::Bishop => 1,
+                            Piece::Rook => 2,
+                            Piece::Queen => 3,
+                            _ => unreachable!(),
+                        };
+                        let mobility = (raw_attacks & !board.colors(color)).len() as i32;
+                        mg[MOBILITY_START + offset] += sign * mobility;
+                        eg[MOBILITY_START + offset] += sign * mobility;
+                        let zone_hits = (raw_attacks & king_zone[!color as usize]).len() as i32;
+                        mg[KING_ZONE_START + offset] += sign * zone_hits;
+                    }
+                }
+            }
+        }
+
+        for color in [Color::White, Color::Black] {
+            add_color_features(board, color, &mut mg, &mut eg);
+            add_bare_king_features(board, color, color_sign(color), &mut eg);
+        }
+        direct[TEMPO] = 1;
+
+        LinearFeatures {
+            mg,
+            eg,
+            direct,
+            phase: phase.min(24),
+            perspective: color_sign(board.side_to_move()),
+        }
+    }
+
+    fn add_color_features(
+        board: &Board,
+        color: Color,
+        mg: &mut [i32; PARAMETER_COUNT],
+        eg: &mut [i32; PARAMETER_COUNT],
+    ) {
+        let sign = color_sign(color);
+        let pawns = board.colored_pieces(color, Piece::Pawn);
+        let enemy_pawns = board.colored_pieces(!color, Piece::Pawn);
+        let mut file_counts = [0_i32; 8];
+        for pawn in pawns {
+            file_counts[pawn.file() as usize] += 1;
+        }
+        for count in file_counts {
+            if count > 1 {
+                mg[DOUBLED_MG] -= sign * (count - 1);
+                eg[DOUBLED_EG] -= sign * (count - 1);
+            }
+        }
+        for pawn in pawns {
+            let file = pawn.file() as i32;
+            let rank = pawn.rank() as i32;
+            let isolated = (file == 0 || file_counts[(file - 1) as usize] == 0)
+                && (file == 7 || file_counts[(file + 1) as usize] == 0);
+            if isolated {
+                mg[ISOLATED_MG] -= sign;
+                eg[ISOLATED_EG] -= sign;
+            }
+            let passed = enemy_pawns.into_iter().all(|enemy| {
+                let close_file = ((enemy.file() as i32) - file).abs() <= 1;
+                let ahead = if color == Color::White {
+                    (enemy.rank() as i32) > rank
+                } else {
+                    (enemy.rank() as i32) < rank
+                };
+                !(close_file && ahead)
+            });
+            if passed {
+                let relative_rank = if color == Color::White {
+                    rank
+                } else {
+                    7 - rank
+                } as usize;
+                mg[MG_PASSER_START + relative_rank] += sign;
+                eg[EG_PASSER_START + relative_rank] += sign;
+                eg[PASSER_ENEMY_KING] += sign * chebyshev_distance(board.king(!color), pawn);
+                eg[PASSER_OWN_KING] -= sign * chebyshev_distance(board.king(color), pawn);
+            }
+        }
+        if board.colored_pieces(color, Piece::Bishop).len() >= 2 {
+            mg[BISHOP_PAIR_MG] += sign;
+            eg[BISHOP_PAIR_EG] += sign;
+        }
+        for rook in board.colored_pieces(color, Piece::Rook) {
+            let file = rook.file() as usize;
+            if file_counts[file] == 0 {
+                if enemy_pawns
+                    .into_iter()
+                    .any(|pawn| pawn.file() as usize == file)
+                {
+                    mg[ROOK_SEMI_OPEN_MG] += sign;
+                    eg[ROOK_SEMI_OPEN_EG] += sign;
+                } else {
+                    mg[ROOK_OPEN_MG] += sign;
+                    eg[ROOK_OPEN_EG] += sign;
+                }
+            }
+        }
+        let king = board.king(color);
+        let shield_rank = king.rank() as i32 + if color == Color::White { 1 } else { -1 };
+        if (0..8).contains(&shield_rank) {
+            for file_delta in -1..=1 {
+                let file = king.file() as i32 + file_delta;
+                if (0..8).contains(&file) {
+                    let square =
+                        Square::new(File::ALL[file as usize], Rank::ALL[shield_rank as usize]);
+                    if board.piece_on(square) == Some(Piece::Pawn)
+                        && board.color_on(square) == Some(color)
+                    {
+                        mg[KING_SHIELD_MG] += sign;
+                    }
+                }
+            }
+        }
+    }
+
+    fn add_bare_king_features(
+        board: &Board,
+        attacker: Color,
+        sign: i32,
+        eg: &mut [i32; PARAMETER_COUNT],
+    ) {
+        let defender = !attacker;
+        if board.colors(defender).len() != 1 {
+            return;
+        }
+        let queens = board.colored_pieces(attacker, Piece::Queen);
+        let rooks = board.colored_pieces(attacker, Piece::Rook);
+        let bishops = board.colored_pieces(attacker, Piece::Bishop);
+        let knights = board.colored_pieces(attacker, Piece::Knight);
+        let has_major = !(queens | rooks).is_empty();
+        let bishop_and_knight = bishops.len() == 1
+            && knights.len() == 1
+            && !has_major
+            && board.colored_pieces(attacker, Piece::Pawn).is_empty();
+        if !has_major && !bishop_and_knight && bishops.len() < 2 {
+            return;
+        }
+        let defending_king = board.king(defender);
+        eg[MOP_KING] += sign * (7 - chebyshev_distance(board.king(attacker), defending_king));
+        if bishop_and_knight {
+            let bishop = bishops
+                .into_iter()
+                .next()
+                .expect("one bishop was established");
+            let bishop_color = (bishop.file() as i32 + bishop.rank() as i32) & 1;
+            let corner_distance = [Square::A1, Square::H1, Square::A8, Square::H8]
+                .into_iter()
+                .filter(|corner| (corner.file() as i32 + corner.rank() as i32) & 1 == bishop_color)
+                .map(|corner| chebyshev_distance(defending_king, corner))
+                .min()
+                .unwrap_or(7);
+            eg[BN_CORNER] += sign * (7 - corner_distance);
+        } else {
+            let edge_distance = (defending_king.file() as i32)
+                .min(7 - defending_king.file() as i32)
+                .min(defending_king.rank() as i32)
+                .min(7 - defending_king.rank() as i32);
+            eg[MOP_EDGE] += sign * (3 - edge_distance);
+            for piece in rooks | queens {
+                let file_box = if defending_king.file() < piece.file() {
+                    piece.file() as i32
+                } else if defending_king.file() > piece.file() {
+                    7 - piece.file() as i32
+                } else {
+                    7
+                };
+                let rank_box = if defending_king.rank() < piece.rank() {
+                    piece.rank() as i32
+                } else if defending_king.rank() > piece.rank() {
+                    7 - piece.rank() as i32
+                } else {
+                    7
+                };
+                eg[ROOK_CONFINEMENT] += sign * (7 - file_box.min(rank_box));
+            }
+        }
+    }
+
+    fn color_sign(color: Color) -> i32 {
+        if color == Color::White { 1 } else { -1 }
+    }
+
+    /// Texel samples exclude checks and positions with an immediately legal
+    /// capture or promotion; these are dominated by short tactical noise.
+    pub fn is_quiet(board: &Board) -> bool {
+        if !board.checkers().is_empty() {
+            return false;
+        }
+        let enemy = board.colors(!board.side_to_move());
+        let en_passant = board.en_passant().map_or(BitBoard::EMPTY, |file| {
+            Square::new(file, Rank::Third.relative_to(!board.side_to_move())).bitboard()
+        });
+        let promotion_rank = Rank::Eighth.relative_to(board.side_to_move()).bitboard();
+        let mut tactical = false;
+        board.generate_moves(|moves| {
+            tactical = moves
+                .into_iter()
+                .any(|mv| enemy.has(mv.to) || en_passant.has(mv.to) || promotion_rank.has(mv.to));
+            tactical
+        });
+        !tactical
+    }
+
+    pub fn generated_source(weights: &[f64; PARAMETER_COUNT], source_hash: u64) -> String {
+        let base = base_weights();
+        let deltas = std::array::from_fn::<i16, PARAMETER_COUNT, _>(|index| {
+            (weights[index] - base[index])
+                .round()
+                .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16
+        });
+        let mut source = format!(
+            "//! Generated by `cargo run --features tuning --bin texel`.\n\n\
+             #[cfg_attr(not(feature = \"tuning\"), allow(dead_code))]\n\
+             pub(crate) const SOURCE_HASH: u64 = 0x{source_hash:016x};\n\
+             pub(crate) const DELTAS: [i16; {PARAMETER_COUNT}] = [\n"
+        );
+        for chunk in deltas.chunks(16) {
+            source.push_str("    ");
+            for delta in chunk {
+                source.push_str(&format!("{delta}, "));
+            }
+            source.push('\n');
+        }
+        source.push_str("];\n");
+        source
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn extracted_model_exactly_matches_production_evaluation() {
+            let mut weights = base_weights_i32();
+            for (weight, &delta) in weights.iter_mut().zip(DELTAS.iter()) {
+                *weight += i32::from(delta);
+            }
+            for fen in [
+                "startpos",
+                "r3k2r/ppp2ppp/2n1bn2/3qp3/3P4/2N1PN2/PPP1BPPP/R2QK2R w KQkq - 4 10",
+                "8/2p2pk1/1p1p2p1/p2P3p/P1P1P3/1P3K2/5PP1/8 b - - 0 35",
+                "7k/8/8/8/8/8/R7/6K1 w - - 0 1",
+                "7k/8/8/8/8/8/4N3/2B3K1 w - - 0 1",
+            ] {
+                let board = if fen == "startpos" {
+                    Board::default()
+                } else {
+                    fen.parse().unwrap()
+                };
+                assert_eq!(
+                    extract(&board).integer_value(&weights),
+                    evaluate(&board),
+                    "{fen}"
+                );
+            }
+        }
+
+        #[test]
+        fn generated_source_has_all_parameters() {
+            let source = generated_source(&current_weights(), 42);
+            assert!(source.contains("SOURCE_HASH: u64 = 0x000000000000002a"));
+            assert_eq!(source.matches("0, ").count(), PARAMETER_COUNT);
+        }
+    }
 }

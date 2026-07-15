@@ -4,7 +4,11 @@
 //! protocol remains independent of Rust implementation details.
 
 mod eval;
+mod eval_tuned;
 mod search;
+
+#[cfg(feature = "tuning")]
+pub use eval::tuning;
 
 use cozy_chess::{Board, File, Move, Piece, Square};
 use serde::Serialize;

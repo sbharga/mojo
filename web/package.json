@@ -10,6 +10,7 @@
     "build:engine": "cd ../engine && wasm-pack build --target web --out-dir pkg --release",
     "bench:engine": "npm run build:engine && node ../engine/bench.mjs",
     "selfplay": "node ../engine/selfplay.mjs",
+    "tune:eval": "cargo run --manifest-path ../engine/Cargo.toml --features tuning --bin texel --",
     "test:openings": "node ../engine/validate-openings.mjs",
     "test:selfplay": "node ../engine/selfplay.mjs --baseline engine/pkg/mojo_engine_bg.wasm --depth 2 --openings 1 --max-plies 20",
     "test:strength": "node ../engine/accuracy.mjs",
