@@ -3,6 +3,8 @@ declare module "../../../engine/pkg/mojo_engine.js" {
   export default function init(): Promise<void>;
   export class Engine {
     constructor();
+    set_stop_flag(stopFlag: Int32Array): void;
+    set_stop_request(requestId: number): void;
     set_position(fen: string, priorFens: string[]): void;
     analyze_depth(
       depth: number,

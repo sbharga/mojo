@@ -113,6 +113,11 @@ CI (`.github/workflows/ci.yml`) runs, in order: `cargo fmt --check`, `cargo clip
   requests are dropped without needing to kill the loop early. `useEngine.ts`
   (`web/src/engine/useEngine.ts`) bumps `requestId` and posts `cancel` for the
   previous one before posting each new `analyze`.
+- When `crossOriginIsolated` is available, `useEngine.ts` gives each worker a
+  one-word SharedArrayBuffer cancellation watermark. The main thread advances
+  it atomically, and Rust compares it with the active request at each adaptive
+  clock check. Without COOP/COEP support, queued messages still cancel between
+  depths. Vite dev/preview set the headers; production hosts must do likewise.
 - `purpose` on a request is `'analysis'` (MultiPV 3, panel display) or
   `'move'` (MultiPV 1; on failure to find any completed line, falls back to
   `engine.fallback_move()` so the app never stalls with no move).

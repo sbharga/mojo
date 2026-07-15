@@ -90,6 +90,18 @@ impl Engine {
         run_analysis(&mut self.search, board, depth, multi_pv, time_limit_ms)
     }
 
+    /// Installs an optional shared cancellation watermark supplied by the worker.
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_stop_flag(&mut self, stop_flag: js_sys::Int32Array) {
+        self.search.set_stop_flag(stop_flag);
+    }
+
+    /// Identifies the request currently being searched for watermark comparison.
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_stop_request(&mut self, request_id: i32) {
+        self.search.set_stop_request(request_id);
+    }
+
     /// Returns the best static one-ply fallback for the current position.
     pub fn fallback_move(&self) -> Option<String> {
         let board = self.board.as_ref()?;

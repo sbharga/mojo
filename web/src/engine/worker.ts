@@ -9,17 +9,20 @@ import type {
   WorkerRequest,
 } from "./types";
 import { toWhiteRelative } from "./analysis";
+import { isCancelled } from "./stopSignal";
 
 let initialized = false;
 let cancelledBefore = 0;
 let engine: Engine | null = null;
 let initialization: Promise<void> | null = null;
+let stopFlag: Int32Array | null = null;
 
 async function ensureEngine() {
   if (initialized) return;
   initialization ??= (async () => {
     await init({ module_or_path: wasmUrl });
     engine = new Engine();
+    if (stopFlag) engine.set_stop_flag(stopFlag);
     initialized = true;
     postMessage({ type: "ready" } satisfies WorkerMessage);
   })();
@@ -36,13 +39,18 @@ async function analyze(request: AnalyzeRequest) {
   try {
     await ensureEngine();
     if (!engine) throw new Error("Engine failed to initialize");
+    engine.set_stop_request(request.requestId);
     engine.set_position(request.fen, request.historyFens);
     const started = performance.now();
     let depth = 1;
     let latest: Analysis | null = null;
     const maxDepth = 32;
     const multiPv = request.purpose === "move" ? 1 : 3;
-    while (request.requestId > cancelledBefore && depth <= maxDepth) {
+    while (
+      request.requestId > cancelledBefore
+      && !isCancelled(stopFlag, request.requestId)
+      && depth <= maxDepth
+    ) {
       const remaining = request.thinkTimeMs - (performance.now() - started);
       if (remaining <= 0 && latest) break;
       // A full remaining budget lets the selected engine-time preset reach
@@ -56,7 +64,10 @@ async function analyze(request: AnalyzeRequest) {
         request.fen,
       );
       const rootedResult: Analysis = { ...result, root_fen: request.fen };
-      if (request.requestId <= cancelledBefore) return;
+      if (
+        request.requestId <= cancelledBefore
+        || isCancelled(stopFlag, request.requestId)
+      ) return;
       // A partial deeper iteration is useful search work, but it must never
       // replace the last fully completed and internally consistent result.
       if (!result.timed_out && result.lines.length > 0) {
@@ -108,7 +119,10 @@ async function analyze(request: AnalyzeRequest) {
         };
       }
     }
-    if (request.requestId > cancelledBefore) {
+    if (
+      request.requestId > cancelledBefore
+      && !isCancelled(stopFlag, request.requestId)
+    ) {
       postMessage({
         type: "complete",
         requestId: request.requestId,
@@ -128,6 +142,7 @@ async function analyze(request: AnalyzeRequest) {
 self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   const request = event.data;
   if (request.type === "initialize") {
+    if (request.stopBuffer) stopFlag = new Int32Array(request.stopBuffer);
     void ensureEngine().catch((error) => {
       postMessage({
         type: "error",

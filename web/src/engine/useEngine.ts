@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnalysisCache } from "./analysisCache";
 import type { Analysis, WorkerMessage } from "./types";
+import { cancelThrough, createStopSignal, type StopSignal } from "./stopSignal";
 
 // The 'move' and 'analysis' purposes each get their own Worker (and Wasm
 // Engine instance) rather than sharing one. A single analyze_depth call is
@@ -21,6 +22,10 @@ export function useEngine(onMove: (uci: string) => void) {
     analysis: null,
   });
   const request = useRef(0);
+  const stopSignals = useRef<Record<Purpose, StopSignal | null>>({
+    move: null,
+    analysis: null,
+  });
   const cache = useRef<AnalysisCache | null>(null);
   if (cache.current === null) cache.current = new AnalysisCache();
   const analysisCache = cache.current;
@@ -34,6 +39,8 @@ export function useEngine(onMove: (uci: string) => void) {
         type: "module",
       });
       workers.current[purpose] = instance;
+      const stopSignal = createStopSignal();
+      stopSignals.current[purpose] = stopSignal;
       instance.onmessage = (event: MessageEvent<WorkerMessage>) => {
         const message = event.data;
         if (message.type === "ready") {
@@ -68,7 +75,10 @@ export function useEngine(onMove: (uci: string) => void) {
             onMove(message.analysis.lines[0].moves[0]);
         }
       };
-      instance.postMessage({ type: "initialize" });
+      instance.postMessage({
+        type: "initialize",
+        stopBuffer: stopSignal?.buffer,
+      });
       return instance;
     });
     return () => instances.forEach((instance) => instance.terminate());
@@ -86,11 +96,13 @@ export function useEngine(onMove: (uci: string) => void) {
       const requestId = request.current;
       // Cancel on both workers: the previous request may have used either
       // purpose, and either worker may still hold an older stale request.
-      for (const p of PURPOSES)
+      for (const p of PURPOSES) {
+        cancelThrough(stopSignals.current[p]?.view ?? null, requestId - 1);
         workers.current[p]?.postMessage({
           type: "cancel",
           requestId: requestId - 1,
         });
+      }
       // A fen already fully analyzed (history navigation, or pause/resume
       // landing back on the same position) doesn't need to be re-searched
       // from depth 1 by the other worker.
@@ -117,11 +129,13 @@ export function useEngine(onMove: (uci: string) => void) {
   const cancel = useCallback(() => {
     request.current += 1;
     setAnalysis(null);
-    for (const p of PURPOSES)
+    for (const p of PURPOSES) {
+      cancelThrough(stopSignals.current[p]?.view ?? null, request.current);
       workers.current[p]?.postMessage({
         type: "cancel",
         requestId: request.current,
       });
+    }
   }, []);
 
   return {

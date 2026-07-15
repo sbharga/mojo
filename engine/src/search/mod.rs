@@ -178,6 +178,10 @@ pub(crate) struct SearchCore {
     clock_check_interval: u64,
     next_clock_check: u64,
     clock_calibrated: bool,
+    #[cfg(target_arch = "wasm32")]
+    stop_flag: Option<js_sys::Int32Array>,
+    #[cfg(target_arch = "wasm32")]
+    stop_request_id: i32,
     timed_out: bool,
     #[cfg(test)]
     node_limit: Option<u64>,
@@ -226,6 +230,10 @@ impl SearchCore {
             clock_check_interval: DEFAULT_TIME_CHECK_INTERVAL,
             next_clock_check: DEFAULT_TIME_CHECK_INTERVAL,
             clock_calibrated: false,
+            #[cfg(target_arch = "wasm32")]
+            stop_flag: None,
+            #[cfg(target_arch = "wasm32")]
+            stop_request_id: i32::MAX,
             timed_out: false,
             #[cfg(test)]
             node_limit: None,
@@ -236,6 +244,16 @@ impl SearchCore {
             #[cfg(test)]
             aspiration_retries: 0,
         }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn set_stop_flag(&mut self, stop_flag: js_sys::Int32Array) {
+        self.stop_flag = Some(stop_flag);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn set_stop_request(&mut self, request_id: i32) {
+        self.stop_request_id = request_id;
     }
 
     pub(crate) fn set_position(&mut self, board: &Board, prior: &[Board]) {
@@ -1147,6 +1165,13 @@ impl SearchCore {
         }
         if self.nodes >= self.next_clock_check {
             self.next_clock_check = self.nodes.saturating_add(self.clock_check_interval);
+            #[cfg(target_arch = "wasm32")]
+            if self.stop_flag.as_ref().is_some_and(|flag| {
+                js_sys::Atomics::load(flag, 0)
+                    .is_ok_and(|cancelled| cancelled >= self.stop_request_id)
+            }) {
+                self.timed_out = true;
+            }
             if crate::now_ms() >= self.deadline_ms {
                 self.timed_out = true;
             }
