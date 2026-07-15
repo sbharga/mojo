@@ -62,6 +62,9 @@ const HISTORY_GOOD: i32 = 4_000;
 const DELTA_PRUNING_MARGIN: i32 = 120;
 /// Maximum number of check-extension plies applied along a single line.
 const MAX_CHECK_EXTENSIONS: u8 = 2;
+const SINGULAR_MIN_DEPTH: i16 = 7;
+const SINGULAR_TT_DEPTH_ALLOWANCE: i16 = 3;
+const SINGULAR_MARGIN_PER_PLY: i32 = 2;
 /// Reverse futility (static null-move) pruning: at shallow depth, if the
 /// static eval already exceeds beta by this margin per ply, cut off early.
 const RFP_MAX_DEPTH: i16 = 8;
@@ -87,6 +90,14 @@ const RAZOR_MARGIN_BASE: i32 = 200;
 const RAZOR_MARGIN_PER_PLY: i32 = 250;
 
 type MoveList = ArrayVec<Move, MAX_MOVES>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SingularOutcome {
+    Extend,
+    MultiCut,
+    Reduce,
+    None,
+}
 
 #[derive(Debug)]
 pub(crate) struct SearchLine {
@@ -276,7 +287,18 @@ impl SearchCore {
             let child = played(board, mv);
             self.path.push(repetition_key(&child));
             let mut score = if index == 0 {
-                -self.negamax(&child, depth - 1, -beta, -alpha, 1, true, true, 0, Some(mv))
+                -self.negamax(
+                    &child,
+                    depth - 1,
+                    -beta,
+                    -alpha,
+                    1,
+                    true,
+                    true,
+                    0,
+                    Some(mv),
+                    None,
+                )
             } else {
                 let mut probe = -self.negamax(
                     &child,
@@ -288,10 +310,21 @@ impl SearchCore {
                     true,
                     0,
                     Some(mv),
+                    None,
                 );
                 if probe > alpha && probe < beta && !self.timed_out {
-                    probe =
-                        -self.negamax(&child, depth - 1, -beta, -alpha, 1, true, true, 0, Some(mv));
+                    probe = -self.negamax(
+                        &child,
+                        depth - 1,
+                        -beta,
+                        -alpha,
+                        1,
+                        true,
+                        true,
+                        0,
+                        Some(mv),
+                        None,
+                    );
                 }
                 probe
             };
@@ -353,6 +386,7 @@ impl SearchCore {
         allow_null: bool,
         extensions: u8,
         prev_move: Option<Move>,
+        excluded_move: Option<Move>,
     ) -> i32 {
         self.nodes += 1;
         self.pv_len[ply.min(MAX_PLY - 1)] = 0;
@@ -384,7 +418,7 @@ impl SearchCore {
 
         let key = rule_key(board);
         let original_alpha = alpha;
-        let entry = self.probe(key);
+        let entry = excluded_move.is_none().then(|| self.probe(key)).flatten();
         let tt_best = entry.and_then(|value| self.valid_tt_move(board, value));
         if let Some(entry) = entry
             && i16::from(entry.depth) >= depth
@@ -422,6 +456,7 @@ impl SearchCore {
                 false,
                 next_extensions,
                 None,
+                None,
             );
             self.path.pop();
             self.null_boundary = previous_null_boundary;
@@ -449,6 +484,7 @@ impl SearchCore {
         let mut static_eval = raw_static_eval.map(|raw| self.corrected_static_eval(board, raw));
         if !pv_node
             && !in_check
+            && excluded_move.is_none()
             && depth <= RFP_MAX_DEPTH
             && beta.abs() < MATE_SCORE - MAX_PLY as i32
         {
@@ -465,6 +501,7 @@ impl SearchCore {
 
         if !pv_node
             && !in_check
+            && excluded_move.is_none()
             && depth <= RAZOR_MAX_DEPTH
             && beta.abs() < MATE_SCORE - MAX_PLY as i32
         {
@@ -480,6 +517,38 @@ impl SearchCore {
             }
         }
 
+        let mut singular_move = None;
+        let mut negative_extension_move = None;
+        if let (Some(entry), Some(tt_move)) = (entry, tt_best)
+            && next_extensions < MAX_CHECK_EXTENSIONS
+            && singular_candidate(depth, entry.depth, entry.bound(), entry.score)
+        {
+            let tt_score = score_from_tt(i32::from(entry.score), ply);
+            let singular_beta = tt_score - SINGULAR_MARGIN_PER_PLY * i32::from(depth);
+            let exclusion_depth = (depth - 1) / 2;
+            let exclusion_score = self.negamax(
+                board,
+                exclusion_depth,
+                singular_beta - 1,
+                singular_beta,
+                ply,
+                false,
+                false,
+                next_extensions,
+                prev_move,
+                Some(tt_move),
+            );
+            if self.timed_out {
+                return 0;
+            }
+            match singular_outcome(exclusion_score, singular_beta, tt_score, beta) {
+                SingularOutcome::Extend => singular_move = Some(tt_move),
+                SingularOutcome::MultiCut => return singular_beta,
+                SingularOutcome::Reduce => negative_extension_move = Some(tt_move),
+                SingularOutcome::None => {}
+            }
+        }
+
         let countermove =
             prev_move.and_then(|p| decode_move(self.countermove[p.from as usize][p.to as usize]));
         let mut picker = MovePicker::new(
@@ -488,7 +557,7 @@ impl SearchCore {
             self.killers[ply],
             countermove,
             prev_move,
-            &[],
+            excluded_move.as_slice(),
         );
         let mut best_score = -INF;
         let mut best_move = None;
@@ -516,7 +585,7 @@ impl SearchCore {
                 0
             };
 
-            if !pv_node && !in_check && move_index > 0 && !gives_check {
+            if !pv_node && !in_check && excluded_move.is_none() && move_index > 0 && !gives_check {
                 if capture
                     && depth <= SEE_PRUNE_MAX_DEPTH
                     && static_exchange(board, mv) < capture_see_threshold(depth, capture_history)
@@ -547,18 +616,24 @@ impl SearchCore {
                 searched_captures.push(mv);
             }
             self.path.push(repetition_key(&child));
+            let singular_extension =
+                i16::from(Some(mv) == singular_move && next_extensions < MAX_CHECK_EXTENSIONS);
+            let negative_extension = i16::from(Some(mv) == negative_extension_move);
+            let full_depth = depth - 1 + singular_extension - negative_extension;
+            let child_extensions = next_extensions + singular_extension as u8;
             let mut score;
             if move_index == 0 {
                 score = -self.negamax(
                     &child,
-                    depth - 1,
+                    full_depth,
                     -beta,
                     -alpha,
                     ply + 1,
                     pv_node,
                     true,
-                    next_extensions,
+                    child_extensions,
                     Some(mv),
+                    None,
                 );
             } else {
                 let reduction = lmr_reduction(
@@ -571,39 +646,42 @@ impl SearchCore {
                 );
                 score = -self.negamax(
                     &child,
-                    depth - 1 - reduction,
+                    full_depth - reduction,
                     -alpha - 1,
                     -alpha,
                     ply + 1,
                     false,
                     true,
-                    next_extensions,
+                    child_extensions,
                     Some(mv),
+                    None,
                 );
                 if reduction > 0 && score > alpha && !self.timed_out {
                     score = -self.negamax(
                         &child,
-                        depth - 1,
+                        full_depth,
                         -alpha - 1,
                         -alpha,
                         ply + 1,
                         false,
                         true,
-                        next_extensions,
+                        child_extensions,
                         Some(mv),
+                        None,
                     );
                 }
                 if score > alpha && score < beta && !self.timed_out {
                     score = -self.negamax(
                         &child,
-                        depth - 1,
+                        full_depth,
                         -beta,
                         -alpha,
                         ply + 1,
                         true,
                         true,
-                        next_extensions,
+                        child_extensions,
                         Some(mv),
+                        None,
                     );
                 }
             }
@@ -628,6 +706,9 @@ impl SearchCore {
         }
 
         if legal_moves_seen == 0 {
+            if excluded_move.is_some() {
+                return original_alpha;
+            }
             return terminal_score(board, ply);
         }
 
@@ -638,7 +719,9 @@ impl SearchCore {
         } else {
             Bound::Exact
         };
-        if let Some(best_move) = best_move {
+        if let Some(best_move) = best_move
+            && excluded_move.is_none()
+        {
             if !in_check
                 && let (Some(raw_eval), Some(corrected_eval)) = (raw_static_eval, static_eval)
             {
@@ -935,6 +1018,30 @@ fn capture_see_threshold(depth: i16, capture_history: i32) -> i32 {
     -SEE_PRUNE_MARGIN_PER_PLY * i32::from(depth) - capture_history.max(0) / 64
 }
 
+fn singular_candidate(depth: i16, tt_depth: i8, bound: Bound, stored_score: i16) -> bool {
+    depth >= SINGULAR_MIN_DEPTH
+        && i16::from(tt_depth) >= depth - SINGULAR_TT_DEPTH_ALLOWANCE
+        && matches!(bound, Bound::Exact | Bound::Lower)
+        && i32::from(stored_score).abs() < MATE_SCORE - MAX_PLY as i32
+}
+
+fn singular_outcome(
+    exclusion_score: i32,
+    singular_beta: i32,
+    tt_score: i32,
+    beta: i32,
+) -> SingularOutcome {
+    if exclusion_score < singular_beta {
+        SingularOutcome::Extend
+    } else if singular_beta >= beta {
+        SingularOutcome::MultiCut
+    } else if tt_score >= beta {
+        SingularOutcome::Reduce
+    } else {
+        SingularOutcome::None
+    }
+}
+
 fn has_non_pawn_material(board: &Board, color: Color) -> bool {
     !(board.colors(color)
         & (board.pieces(Piece::Knight)
@@ -997,6 +1104,21 @@ mod tests {
     }
 
     #[test]
+    fn singular_extension_gate_requires_depth_bound_and_non_mate_score() {
+        assert!(singular_candidate(7, 4, Bound::Lower, 100));
+        assert!(singular_candidate(8, 8, Bound::Exact, -100));
+        assert!(!singular_candidate(6, 6, Bound::Lower, 100));
+        assert!(!singular_candidate(8, 4, Bound::Lower, 100));
+        assert!(!singular_candidate(8, 8, Bound::Upper, 100));
+        assert!(!singular_candidate(8, 8, Bound::Lower, 30_000));
+
+        assert_eq!(singular_outcome(79, 80, 100, 90), SingularOutcome::Extend);
+        assert_eq!(singular_outcome(90, 90, 100, 90), SingularOutcome::MultiCut);
+        assert_eq!(singular_outcome(85, 85, 100, 90), SingularOutcome::Reduce);
+        assert_eq!(singular_outcome(85, 85, 89, 90), SingularOutcome::None);
+    }
+
+    #[test]
     fn null_move_boundary_excludes_real_history_from_repetition() {
         let board = Board::default().null_move().unwrap();
         let key = repetition_key(&board);
@@ -1034,7 +1156,7 @@ mod tests {
         assert!(legal_moves(&board).is_empty());
         assert!(board.checkers().is_empty());
         assert_eq!(
-            search.negamax(&board, 3, -1_001, -1_000, 0, false, true, 0, None),
+            search.negamax(&board, 3, -1_001, -1_000, 0, false, true, 0, None, None,),
             0
         );
     }
