@@ -31,6 +31,12 @@ behavior, Wasm size, and memory across the engine-time presets. Each benchmark
 sample uses a fresh engine instance so transposition-table warming does not
 skew comparisons between time budgets or MultiPV settings.
 
+Search uses a hard per-move deadline inside Rust and a dynamic soft deadline
+between completed iterations. Stable best moves and concentrated root effort
+can return early for responsiveness; best-move changes, score drops, and
+scattered effort extend thinking toward the hard limit. Benchmark and timed
+self-play loops consume the same Rust-provided policy as the browser worker.
+
 `npm --prefix web run test:strength` runs a deterministic tactical regression
 suite against the generated Wasm engine. It uses fixed-depth, hand-verifiable
 positions so search changes cannot silently lose basic tactical correctness.

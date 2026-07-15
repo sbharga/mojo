@@ -137,6 +137,7 @@ pub(crate) struct SearchLine {
 pub(crate) struct SearchResult {
     pub(crate) nodes: u64,
     pub(crate) root_node_fraction: f64,
+    pub(crate) soft_time_fraction: f64,
     pub(crate) timed_out: bool,
     pub(crate) lines: Vec<SearchLine>,
 }
@@ -159,6 +160,9 @@ pub(crate) struct SearchCore {
     path: ArrayVec<u64, MAX_PLY>,
     null_boundary: Option<usize>,
     previous_scores: Vec<i32>,
+    previous_best_move: Option<Move>,
+    previous_iteration_score: Option<i32>,
+    stable_best_iterations: u8,
     root_key: u64,
     generation: u8,
     nodes: u64,
@@ -199,6 +203,9 @@ impl SearchCore {
             path: ArrayVec::new(),
             null_boundary: None,
             previous_scores: Vec::new(),
+            previous_best_move: None,
+            previous_iteration_score: None,
+            stable_best_iterations: 0,
             root_key: 0,
             generation: 0,
             nodes: 0,
@@ -220,6 +227,9 @@ impl SearchCore {
         if self.root_key != root_key {
             self.root_key = root_key;
             self.previous_scores.clear();
+            self.previous_best_move = None;
+            self.previous_iteration_score = None;
+            self.stable_best_iterations = 0;
             self.generation = self.generation.wrapping_add(1);
             for row in &mut self.history {
                 for value in row {
@@ -271,6 +281,7 @@ impl SearchCore {
             return SearchResult {
                 nodes: 0,
                 root_node_fraction: 0.0,
+                soft_time_fraction: 0.5,
                 timed_out: false,
                 lines: Vec::new(),
             };
@@ -327,9 +338,14 @@ impl SearchCore {
         }
 
         let root_node_fraction = self.root_node_fraction(lines.first());
+        let soft_time_fraction = self.update_time_management(
+            (!self.timed_out).then(|| lines.first()).flatten(),
+            root_node_fraction,
+        );
         SearchResult {
             nodes: self.nodes,
             root_node_fraction,
+            soft_time_fraction,
             timed_out: self.timed_out,
             lines,
         }
@@ -1165,6 +1181,48 @@ impl SearchCore {
             .map_or(0.0, |stat| stat.nodes as f64 / total as f64)
     }
 
+    fn update_time_management(
+        &mut self,
+        primary: Option<&SearchLine>,
+        root_node_fraction: f64,
+    ) -> f64 {
+        let Some(line) = primary else { return 0.5 };
+        let Some(&best_move) = line.moves.first() else {
+            return 0.5;
+        };
+        let changed = self
+            .previous_best_move
+            .is_some_and(|previous| previous != best_move);
+        if self.previous_best_move == Some(best_move) {
+            self.stable_best_iterations = self.stable_best_iterations.saturating_add(1);
+        } else {
+            self.stable_best_iterations = 0;
+        }
+        let score_dropped = self
+            .previous_iteration_score
+            .is_some_and(|previous| line.score < previous - 50);
+
+        let mut fraction = 0.5_f64;
+        if self.stable_best_iterations >= 2 {
+            fraction *= 0.8_f64.powi(i32::from(self.stable_best_iterations - 1));
+        }
+        if root_node_fraction >= 0.75 {
+            fraction *= 0.8;
+        } else if root_node_fraction > 0.0 && root_node_fraction < 0.35 {
+            fraction = fraction.max(0.7);
+        }
+        if changed {
+            fraction = fraction.max(0.8);
+        }
+        if score_dropped {
+            fraction = fraction.max(0.9);
+        }
+
+        self.previous_best_move = Some(best_move);
+        self.previous_iteration_score = Some(line.score);
+        fraction.clamp(0.25, 0.9)
+    }
+
     fn store(
         &mut self,
         key: u64,
@@ -1716,5 +1774,30 @@ mod tests {
             ),
             0
         );
+    }
+
+    #[test]
+    fn soft_time_fraction_responds_to_stability_effort_and_score_drops() {
+        let first = SearchLine {
+            score: 100,
+            moves: vec!["e2e4".parse().unwrap()],
+        };
+        let changed = SearchLine {
+            score: 100,
+            moves: vec!["d2d4".parse().unwrap()],
+        };
+        let dropped = SearchLine {
+            score: 0,
+            moves: changed.moves.clone(),
+        };
+        let mut search = SearchCore::new();
+        assert_eq!(search.update_time_management(Some(&first), 0.5), 0.5);
+        assert_eq!(search.update_time_management(Some(&first), 0.8), 0.4);
+        assert!((search.update_time_management(Some(&first), 0.8) - 0.32).abs() < f64::EPSILON);
+        assert_eq!(search.update_time_management(Some(&changed), 0.5), 0.8);
+        assert_eq!(search.update_time_management(Some(&dropped), 0.5), 0.9);
+
+        let mut scattered = SearchCore::new();
+        assert_eq!(scattered.update_time_management(Some(&first), 0.2), 0.7);
     }
 }

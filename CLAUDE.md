@@ -95,6 +95,11 @@ CI (`.github/workflows/ci.yml`) runs, in order: `cargo fmt --check`, `cargo clip
   `initialize` message), then runs iterative deepening itself by calling
   `analyze_depth` in a loop up to depth 32, posting an `analysis` message per
   completed, non-timed-out iteration and a final `complete` message.
+- Rust returns a `soft_time_fraction` after each completed iteration, derived
+  from best-move stability, score drops, and the best move's root-node share.
+  The worker, benchmark, and timed self-play stop between iterations at that
+  soft fraction; the existing Rust deadline remains the non-negotiable hard
+  limit inside an iteration.
 - Requests carry a monotonically increasing `requestId`; a `cancel` message
   records the highest cancelled id so in-flight/late results from stale
   requests are dropped without needing to kill the loop early. `useEngine.ts`

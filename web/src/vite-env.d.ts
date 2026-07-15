@@ -27,6 +27,8 @@ declare module "../../../engine/pkg/mojo_engine.js" {
   interface AnalysisResult {
     depth: number;
     nodes: number;
+    root_node_fraction: number;
+    soft_time_fraction: number;
     elapsed_ms: number;
     timed_out: boolean;
     lines: AnalysisLine[];

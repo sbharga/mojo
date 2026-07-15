@@ -68,6 +68,11 @@ async function analyze(request: AnalyzeRequest) {
         } satisfies WorkerMessage);
       }
       if (result.timed_out) break;
+      if (
+        latest
+        && performance.now() - started
+          >= request.thinkTimeMs * result.soft_time_fraction
+      ) break;
       depth += 1;
       // Each analyze_depth call is a single synchronous, uninterruptible Wasm
       // call, so this loop must yield back to the event loop between depths.
@@ -87,6 +92,7 @@ async function analyze(request: AnalyzeRequest) {
           depth: 0,
           nodes: 0,
           root_node_fraction: 1,
+          soft_time_fraction: 1,
           elapsed_ms: performance.now() - started,
           timed_out: true,
           lines: [{ score_cp: 0, moves: [move] }],

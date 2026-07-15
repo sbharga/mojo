@@ -17,6 +17,7 @@ export interface Analysis {
   depth: number;
   nodes: number;
   root_node_fraction: number;
+  soft_time_fraction: number;
   elapsed_ms: number;
   timed_out: boolean;
   lines: AnalysisLine[];

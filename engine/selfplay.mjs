@@ -195,6 +195,12 @@ function search(engine, fen, priorFens, options) {
     const result = engine.analyze_depth(currentDepth, 1, Math.max(5, remaining))
     if (!result.timed_out && result.lines.length > 0) completed = result
     if (result.timed_out) break
+    if (
+      options.moveTimeMs !== undefined
+      && completed
+      && performance.now() - started
+        >= options.moveTimeMs * (result.soft_time_fraction ?? 0.5)
+    ) break
   }
   const line = completed?.lines[0]
   const move = line?.moves[0] ?? engine.fallback_move()
