@@ -35,7 +35,8 @@ const TIME_CHECK_INTERVAL: u64 = 256;
 
 /// Half-width of the aspiration window placed around the previous
 /// iteration's score.
-const ASPIRATION_WINDOW: i32 = 35;
+const ASPIRATION_INITIAL_DELTA: i32 = 20;
+const ASPIRATION_MAX_RETRIES: u8 = 4;
 /// Null-move reduction is `NULL_MOVE_BASE_REDUCTION + depth / NULL_MOVE_DEPTH_DIVISOR`,
 /// growing more conservative (smaller reduction) at higher depth.
 const NULL_MOVE_BASE_REDUCTION: i16 = 2;
@@ -107,6 +108,12 @@ enum SingularOutcome {
     None,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AspirationFailure {
+    Low,
+    High,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct LmrContext {
     capture: bool,
@@ -159,6 +166,8 @@ pub(crate) struct SearchCore {
     null_verifications: u64,
     #[cfg(test)]
     probcut_cutoffs: u64,
+    #[cfg(test)]
+    aspiration_retries: u64,
 }
 
 impl SearchCore {
@@ -194,6 +203,8 @@ impl SearchCore {
             null_verifications: 0,
             #[cfg(test)]
             probcut_cutoffs: 0,
+            #[cfg(test)]
+            aspiration_retries: 0,
         }
     }
 
@@ -237,6 +248,10 @@ impl SearchCore {
     ) -> SearchResult {
         self.nodes = 0;
         self.timed_out = false;
+        #[cfg(test)]
+        {
+            self.aspiration_retries = 0;
+        }
         self.deadline_ms = crate::now_ms() + time_limit_ms.max(5.0);
         self.path.clear();
         self.path.push(repetition_key(board));
@@ -256,21 +271,36 @@ impl SearchCore {
 
         for pv_index in 0..multi_pv.clamp(1, 5) as usize {
             let previous = self.previous_scores.get(pv_index).copied();
-            let (mut alpha, mut beta) = previous.map_or((-INF, INF), |score| {
-                (
-                    score.saturating_sub(ASPIRATION_WINDOW),
-                    score.saturating_add(ASPIRATION_WINDOW),
-                )
-            });
-            let mut line = self.search_root(board, depth, &excluded, alpha, beta);
-            if !self.timed_out
-                && line
-                    .as_ref()
-                    .is_some_and(|result| result.score <= alpha || result.score >= beta)
-            {
-                alpha = -INF;
-                beta = INF;
+            let (mut alpha, mut beta) = initial_aspiration_window(previous);
+            let mut delta = ASPIRATION_INITIAL_DELTA;
+            let mut retries = 0;
+            let mut line;
+            loop {
                 line = self.search_root(board, depth, &excluded, alpha, beta);
+                if self.timed_out {
+                    break;
+                }
+                let Some(score) = line.as_ref().map(|result| result.score) else {
+                    break;
+                };
+                let failure = if score <= alpha {
+                    Some(AspirationFailure::Low)
+                } else if score >= beta {
+                    Some(AspirationFailure::High)
+                } else {
+                    None
+                };
+                let Some(failure) = failure else { break };
+                if alpha == -INF && beta == INF {
+                    break;
+                }
+                retries += 1;
+                #[cfg(test)]
+                {
+                    self.aspiration_retries += 1;
+                }
+                (alpha, beta, delta) =
+                    widen_aspiration(alpha, beta, score, delta, retries, failure);
             }
             let Some(line) = line else { break };
             if self.timed_out {
@@ -1196,6 +1226,35 @@ fn compact_static_eval(eval: i32) -> i16 {
     eval.clamp(i32::from(i16::MIN) + 1, i32::from(i16::MAX)) as i16
 }
 
+fn initial_aspiration_window(previous: Option<i32>) -> (i32, i32) {
+    previous
+        .filter(|score| score.abs() < MATE_SCORE - MAX_PLY as i32)
+        .map_or((-INF, INF), |score| {
+            (
+                score.saturating_sub(ASPIRATION_INITIAL_DELTA).max(-INF),
+                score.saturating_add(ASPIRATION_INITIAL_DELTA).min(INF),
+            )
+        })
+}
+
+fn widen_aspiration(
+    alpha: i32,
+    beta: i32,
+    score: i32,
+    delta: i32,
+    retries: u8,
+    failure: AspirationFailure,
+) -> (i32, i32, i32) {
+    let next_delta = delta.saturating_mul(2).min(INF);
+    if retries >= ASPIRATION_MAX_RETRIES || score.abs() >= MATE_SCORE - MAX_PLY as i32 {
+        return (-INF, INF, next_delta);
+    }
+    match failure {
+        AspirationFailure::Low => (score.saturating_sub(next_delta).max(-INF), beta, next_delta),
+        AspirationFailure::High => (alpha, score.saturating_add(next_delta).min(INF), next_delta),
+    }
+}
+
 const fn build_lmr_table() -> [[u8; LMR_TABLE_MOVES]; LMR_TABLE_DEPTHS] {
     let mut table = [[0; LMR_TABLE_MOVES]; LMR_TABLE_DEPTHS];
     let mut depth = 1;
@@ -1540,6 +1599,33 @@ mod tests {
         assert_eq!(entry.bound(), Bound::Lower);
         assert!(entry.depth < 5);
         assert_eq!(decode_move(entry.best), Some("d2d7".parse().unwrap()));
+    }
+
+    #[test]
+    fn aspiration_windows_widen_only_the_failed_side_before_fallback() {
+        assert_eq!(initial_aspiration_window(Some(100)), (80, 120));
+        assert_eq!(initial_aspiration_window(Some(30_000)), (-INF, INF));
+        assert_eq!(
+            widen_aspiration(80, 120, 120, 20, 1, AspirationFailure::High),
+            (80, 160, 40)
+        );
+        assert_eq!(
+            widen_aspiration(80, 120, 80, 20, 1, AspirationFailure::Low),
+            (40, 120, 40)
+        );
+        assert_eq!(
+            widen_aspiration(80, 120, 120, 80, 4, AspirationFailure::High),
+            (-INF, INF, 160)
+        );
+
+        let board = Board::default();
+        let mut search = SearchCore::new();
+        search.set_position(&board, &[]);
+        search.previous_scores.push(1_000);
+        let result = search.analyze_depth(&board, 2, 1, 10_000.0);
+        assert!(!result.timed_out);
+        assert_eq!(result.lines.len(), 1);
+        assert!(search.aspiration_retries > 0);
     }
 
     #[test]
