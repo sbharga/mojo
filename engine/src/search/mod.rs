@@ -65,6 +65,7 @@ const MAX_CHECK_EXTENSIONS: u8 = 2;
 const SINGULAR_MIN_DEPTH: i16 = 7;
 const SINGULAR_TT_DEPTH_ALLOWANCE: i16 = 3;
 const SINGULAR_MARGIN_PER_PLY: i32 = 2;
+const IIR_MIN_DEPTH: i16 = 4;
 /// Reverse futility (static null-move) pruning: at shallow depth, if the
 /// static eval already exceeds beta by this margin per ply, cut off early.
 const RFP_MAX_DEPTH: i16 = 8;
@@ -431,6 +432,17 @@ impl SearchCore {
                 Bound::Upper if score <= alpha => return score,
                 _ => {}
             }
+        }
+
+        if should_apply_iir(
+            depth,
+            tt_best.is_some(),
+            pv_node,
+            alpha,
+            beta,
+            excluded_move.is_some(),
+        ) {
+            depth -= 1;
         }
 
         if allow_null
@@ -1042,6 +1054,17 @@ fn singular_outcome(
     }
 }
 
+fn should_apply_iir(
+    depth: i16,
+    has_tt_move: bool,
+    pv_node: bool,
+    alpha: i32,
+    beta: i32,
+    exclusion_search: bool,
+) -> bool {
+    depth >= IIR_MIN_DEPTH && !has_tt_move && !exclusion_search && (pv_node || beta == alpha + 1)
+}
+
 fn has_non_pawn_material(board: &Board, color: Color) -> bool {
     !(board.colors(color)
         & (board.pieces(Piece::Knight)
@@ -1116,6 +1139,16 @@ mod tests {
         assert_eq!(singular_outcome(90, 90, 100, 90), SingularOutcome::MultiCut);
         assert_eq!(singular_outcome(85, 85, 100, 90), SingularOutcome::Reduce);
         assert_eq!(singular_outcome(85, 85, 89, 90), SingularOutcome::None);
+    }
+
+    #[test]
+    fn iir_only_reduces_deep_pv_or_zero_window_nodes_without_a_tt_move() {
+        assert!(should_apply_iir(4, false, true, -100, 100, false));
+        assert!(should_apply_iir(6, false, false, 10, 11, false));
+        assert!(!should_apply_iir(3, false, true, -100, 100, false));
+        assert!(!should_apply_iir(6, true, true, -100, 100, false));
+        assert!(!should_apply_iir(6, false, false, -100, 100, false));
+        assert!(!should_apply_iir(6, false, true, -100, 100, true));
     }
 
     #[test]
