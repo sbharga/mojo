@@ -93,6 +93,9 @@ const LMP_NOT_IMPROVING_REDUCTION: usize = 2;
 const RAZOR_MAX_DEPTH: i16 = 2;
 const RAZOR_MARGIN_BASE: i32 = 200;
 const RAZOR_MARGIN_PER_PLY: i32 = 250;
+const PROBCUT_MIN_DEPTH: i16 = 5;
+const PROBCUT_MARGIN: i32 = 180;
+const PROBCUT_DEPTH_REDUCTION: i16 = 4;
 
 type MoveList = ArrayVec<Move, MAX_MOVES>;
 
@@ -154,6 +157,8 @@ pub(crate) struct SearchCore {
     node_limit: Option<u64>,
     #[cfg(test)]
     null_verifications: u64,
+    #[cfg(test)]
+    probcut_cutoffs: u64,
 }
 
 impl SearchCore {
@@ -187,6 +192,8 @@ impl SearchCore {
             node_limit: None,
             #[cfg(test)]
             null_verifications: 0,
+            #[cfg(test)]
+            probcut_cutoffs: 0,
         }
     }
 
@@ -589,6 +596,51 @@ impl SearchCore {
                     return 0;
                 }
                 if score <= alpha {
+                    return score;
+                }
+            }
+        }
+
+        if should_probcut(depth, beta, pv_node, in_check, excluded_move.is_some()) {
+            let probcut_beta = beta + PROBCUT_MARGIN;
+            let mut captures = QuiescencePicker::new(board, false, self, ply);
+            while let Some((mv, see)) = captures.next() {
+                if !is_capture(board, mv) || see < 0 {
+                    continue;
+                }
+                let child = played(board, mv);
+                self.path.push(repetition_key(&child));
+                let score = -self.negamax(
+                    &child,
+                    depth - PROBCUT_DEPTH_REDUCTION,
+                    -probcut_beta,
+                    -probcut_beta + 1,
+                    ply + 1,
+                    false,
+                    true,
+                    next_extensions,
+                    Some(mv),
+                    None,
+                    threat_move,
+                );
+                self.path.pop();
+                if self.timed_out {
+                    return 0;
+                }
+                if score >= probcut_beta {
+                    #[cfg(test)]
+                    {
+                        self.probcut_cutoffs += 1;
+                    }
+                    self.record_capture_cutoff(board, mv, depth, &[mv]);
+                    self.store(
+                        key,
+                        depth - PROBCUT_DEPTH_REDUCTION + 1,
+                        score_to_tt(score, ply),
+                        Bound::Lower,
+                        Some(mv),
+                        raw_static_eval,
+                    );
                     return score;
                 }
             }
@@ -1238,6 +1290,20 @@ fn defends_against_threat(board: &Board, child: &Board, threat: Move) -> bool {
         && (!is_capture(child, threat) || static_exchange(child, threat) < 0)
 }
 
+fn should_probcut(
+    depth: i16,
+    beta: i32,
+    pv_node: bool,
+    in_check: bool,
+    exclusion_search: bool,
+) -> bool {
+    depth >= PROBCUT_MIN_DEPTH
+        && !pv_node
+        && !in_check
+        && !exclusion_search
+        && beta.abs() < MATE_SCORE - MAX_PLY as i32 - PROBCUT_MARGIN
+}
+
 fn has_non_pawn_material(board: &Board, color: Color) -> bool {
     !(board.colors(color)
         & (board.pieces(Piece::Knight)
@@ -1453,6 +1519,27 @@ mod tests {
         );
 
         assert!(search.null_verifications > 0);
+    }
+
+    #[test]
+    fn probcut_uses_a_winning_capture_and_stores_a_reduced_bound() {
+        assert!(should_probcut(5, 0, false, false, false));
+        assert!(!should_probcut(4, 0, false, false, false));
+        assert!(!should_probcut(5, 0, true, false, false));
+        assert!(!should_probcut(5, 0, false, true, false));
+        assert!(!should_probcut(5, 0, false, false, true));
+
+        let board = "7k/3q4/8/8/8/8/3R4/7K w - - 0 1".parse::<Board>().unwrap();
+        let mut search = SearchCore::new();
+        search.path.push(repetition_key(&board));
+        let score = search.negamax(&board, 6, 99, 100, 0, false, true, 0, None, None, None);
+
+        assert!(score >= 100 + PROBCUT_MARGIN);
+        assert!(search.probcut_cutoffs > 0);
+        let entry = search.probe(rule_key(&board)).unwrap();
+        assert_eq!(entry.bound(), Bound::Lower);
+        assert!(entry.depth < 5);
+        assert_eq!(decode_move(entry.best), Some("d2d7".parse().unwrap()));
     }
 
     #[test]
