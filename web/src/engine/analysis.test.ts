@@ -9,6 +9,7 @@ import type { Analysis } from "./types";
 
 const result: Analysis = {
   root_fen: "old position",
+  repetition_fingerprint: "0000000000000000",
   depth: 4,
   nodes: 100,
   root_node_fraction: 0.5,

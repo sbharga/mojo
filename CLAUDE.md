@@ -137,6 +137,11 @@ CI (`.github/workflows/ci.yml`) runs, in order: `cargo fmt --check`, `cargo clip
   `bestMoveForPosition`, `formatAnalysisScore`) used by the UI to avoid
   rendering analysis that no longer matches the current position (`root_fen`
   must match the live FEN).
+- `AnalysisCache` keys its 256-entry LRU by FEN plus the worker-provided
+  repetition fingerprint. `repetitionFingerprint.ts` commutatively hashes the
+  canonical position identities in the last `halfmove_clock` prior FENs, so
+  transpositions with different repetition claims stay separate while older,
+  irrelevant history does not reduce cache hits.
 
 ### UI (web/src/)
 
