@@ -18,6 +18,11 @@ export class AnalysisCache {
     return entry;
   }
 
+  peek(fen: string, minLines: number): Analysis | null {
+    const entry = this.entries.get(fen);
+    return entry && entry.lines.length >= minLines ? entry : null;
+  }
+
   set(fen: string, analysis: Analysis): void {
     const existing = this.entries.get(fen);
     if (

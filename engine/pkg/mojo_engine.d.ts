@@ -21,6 +21,13 @@ export class Engine {
     fallback_move(): string | undefined;
     constructor();
     /**
+     * Seeds this instance's transposition table from another worker's PV.
+     *
+     * # Errors
+     * Returns an error if the score is ambiguous or any PV move is illegal.
+     */
+    seed_pv(moves: any, depth: number, score_cp?: number | null, mate_in?: number | null): number;
+    /**
      * Sets the root and its preceding game positions.
      *
      * # Errors
@@ -62,6 +69,7 @@ export interface InitOutput {
     readonly engine_fallback_move: (a: number, b: number) => void;
     readonly engine_name: (a: number) => void;
     readonly engine_new: () => number;
+    readonly engine_seed_pv: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly engine_set_position: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly engine_set_stop_flag: (a: number, b: number) => void;
     readonly engine_set_stop_request: (a: number, b: number) => void;

@@ -33,6 +33,14 @@ export interface AnalyzeRequest {
   historyFens: string[];
   thinkTimeMs: number;
   purpose: "analysis" | "move";
+  seed?: SearchSeed;
+}
+
+export interface SearchSeed {
+  moves: string[];
+  depth: number;
+  score_cp?: number;
+  mate_in?: number;
 }
 
 export interface InitializeRequest {

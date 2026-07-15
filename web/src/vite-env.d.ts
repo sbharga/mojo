@@ -5,6 +5,12 @@ declare module "../../../engine/pkg/mojo_engine.js" {
     constructor();
     set_stop_flag(stopFlag: Int32Array): void;
     set_stop_request(requestId: number): void;
+    seed_pv(
+      moves: string[],
+      depth: number,
+      scoreCp?: number,
+      mateIn?: number,
+    ): number;
     set_position(fen: string, priorFens: string[]): void;
     analyze_depth(
       depth: number,

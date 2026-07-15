@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnalysisCache } from "./analysisCache";
 import type { Analysis, WorkerMessage } from "./types";
 import { cancelThrough, createStopSignal, type StopSignal } from "./stopSignal";
+import { ponderSeed } from "./pvSeed";
 
 // The 'move' and 'analysis' purposes each get their own Worker (and Wasm
 // Engine instance) rather than sharing one. A single analyze_depth call is
@@ -113,6 +114,10 @@ export function useEngine(onMove: (uci: string) => void) {
           onMove(cached.lines[0].moves[0]);
         return;
       }
+      const predecessorFen = historyFens.at(-1);
+      const seed = purpose === "move" && predecessorFen
+        ? ponderSeed(fen, analysisCache.peek(predecessorFen, 1))
+        : null;
       setAnalysis(null);
       workers.current[purpose]?.postMessage({
         type: "analyze",
@@ -121,6 +126,7 @@ export function useEngine(onMove: (uci: string) => void) {
         historyFens,
         thinkTimeMs,
         purpose,
+        seed: seed ?? undefined,
       });
     },
     [analysisCache, onMove],

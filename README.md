@@ -108,6 +108,10 @@ licensing, correctness, and fixed-time strength gates.
   analysis by request id. On a cross-origin-isolated page, each worker also
   receives a SharedArrayBuffer cancellation watermark that Rust polls at its
   adaptive clock interval; other deployments retain between-depth fallback.
+- When the analysis worker predicted the human's move, its completed primary
+  PV is forwarded as a ponder seed for the resulting position. Rust validates
+  the suffix and installs exact, decreasing-depth TT entries before the move
+  worker searches, while a missed prediction is ignored.
 - Stockfish Lite runs as a separate UCI worker only in Stockfish game modes;
   its GPLv3 attribution and source information are in `THIRD_PARTY_NOTICES.md`.
 

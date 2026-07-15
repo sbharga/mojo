@@ -43,6 +43,14 @@ async function analyze(request: AnalyzeRequest) {
     if (!engine) throw new Error("Engine failed to initialize");
     engine.set_stop_request(request.requestId);
     engine.set_position(request.fen, request.historyFens);
+    if (request.seed) {
+      engine.seed_pv(
+        request.seed.moves,
+        request.seed.depth,
+        request.seed.score_cp,
+        request.seed.mate_in,
+      );
+    }
     const started = performance.now();
     let depth = 1;
     let latest: Analysis | null = null;
