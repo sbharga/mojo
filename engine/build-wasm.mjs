@@ -7,11 +7,15 @@ import { fileURLToPath } from 'node:url'
 const engineDir = fileURLToPath(new URL('.', import.meta.url))
 const baselineDir = resolve(engineDir, 'pkg')
 const simdDir = mkdtempSync(join(tmpdir(), 'mojo-wasm-simd-'))
+const featureIndex = process.argv.indexOf('--features')
+const features = featureIndex === -1 ? undefined : process.argv[featureIndex + 1]
+if (featureIndex !== -1 && !features) throw new Error('--features requires a Cargo feature list')
 
 function build(outDir, rustFlags = process.env.RUSTFLAGS ?? '') {
+  const cargoArguments = features ? ['--', '--features', features] : []
   const result = spawnSync(
     'wasm-pack',
-    ['build', '--target', 'web', '--out-dir', outDir, '--release'],
+    ['build', '--target', 'web', '--out-dir', outDir, '--release', ...cargoArguments],
     {
       cwd: engineDir,
       env: { ...process.env, RUSTFLAGS: rustFlags },

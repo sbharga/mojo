@@ -3,6 +3,8 @@
 //! The public Wasm entry point accepts and returns plain data so the worker
 //! protocol remains independent of Rust implementation details.
 
+#[cfg(feature = "book")]
+mod book;
 mod eval;
 mod eval_tuned;
 mod kpk;
@@ -149,6 +151,13 @@ impl Engine {
     pub fn fallback_move(&self) -> Option<String> {
         let board = self.board.as_ref()?;
         fallback(board).map(|mv| uci_move(board, mv))
+    }
+
+    /// Selects a weighted reply from the optional embedded opening book.
+    #[cfg(feature = "book")]
+    pub fn book_move(&self, seed: u32) -> Option<String> {
+        let board = self.board.as_ref()?;
+        book::book_move(board, seed).map(|mv| uci_move(board, mv))
     }
 }
 

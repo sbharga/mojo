@@ -44,6 +44,38 @@ async function analyze(request: AnalyzeRequest) {
     if (!engine) throw new Error("Engine failed to initialize");
     engine.set_stop_request(request.requestId);
     engine.set_position(request.fen, request.historyFens);
+    const started = performance.now();
+    const historyFingerprint = repetitionFingerprint(request.fen, request.historyFens);
+    const bookEngine = engine as Engine & {
+      book_move?: (seed: number) => string | undefined;
+    };
+    if (request.purpose === "move" && bookEngine.book_move) {
+      const seed = crypto.getRandomValues(new Uint32Array(1))[0];
+      const move = bookEngine.book_move(seed);
+      if (move) {
+        const analysis: Analysis = {
+          root_fen: request.fen,
+          repetition_fingerprint: historyFingerprint,
+          depth: 0,
+          nodes: 0,
+          root_node_fraction: 1,
+          soft_time_fraction: 0,
+          predicted_next_ms: 0,
+          ebf_gate_override: false,
+          clock_check_interval: 0,
+          elapsed_ms: performance.now() - started,
+          timed_out: false,
+          lines: [{ score_cp: 0, moves: [move] }],
+        };
+        postMessage({
+          type: "complete",
+          requestId: request.requestId,
+          purpose: request.purpose,
+          analysis,
+        } satisfies WorkerMessage);
+        return;
+      }
+    }
     if (request.seed) {
       engine.seed_pv(
         request.seed.moves,
@@ -52,8 +84,6 @@ async function analyze(request: AnalyzeRequest) {
         request.seed.mate_in,
       );
     }
-    const started = performance.now();
-    const historyFingerprint = repetitionFingerprint(request.fen, request.historyFens);
     let depth = 1;
     let latest: Analysis | null = null;
     const maxDepth = 32;
