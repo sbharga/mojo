@@ -11,6 +11,16 @@ Mojo is a Rust chess engine compiled to WebAssembly, plus a React web UI to play
 
 `no unsafe`: `unsafe_code` is `forbid`den crate-wide. Rust edition 2024.
 
+## Design goal
+
+The engine should be **as lightweight and as fast as possible while staying accurate**. These three pull against each other, and every change is judged by that balance:
+
+- **Lightweight** — small Wasm binary (CI enforces a `twiggy` size profile and `npm run check` includes a size gate). Prefer solutions that don't grow the binary; the opening book and SIMD variant are optional/feature-gated for this reason.
+- **Fast** — strong play within a tight per-move time budget. Search efficiency (move ordering, pruning, TT reuse across positions) matters more than raw feature count.
+- **Accurate** — strength must not regress. Evaluation/search-tuning changes are validated with the self-play / SPRT-style harnesses, never by eyeballing.
+
+When a change trades one of these for another, call it out explicitly rather than silently favoring one.
+
 ## Commands
 
 All `npm` scripts live in `web/package.json` and run from `web/` (CI uses `--prefix web`). Building the Wasm requires `wasm-pack` on PATH.
