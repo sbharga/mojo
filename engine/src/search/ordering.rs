@@ -2,7 +2,7 @@
 //! cutoff bookkeeping that feeds killers, history, and countermoves.
 
 use arrayvec::ArrayVec;
-use cozy_chess::{Board, Move};
+use cozy_chess::{Board, Move, Piece};
 
 use crate::eval::piece_value;
 
@@ -11,6 +11,11 @@ use super::moves::{
 };
 use super::see::static_exchange;
 use super::{MAX_MOVES, MAX_PLY, SearchCore};
+
+const PIECE_TO_SQUARE: usize = 6 * 64;
+pub(crate) const CONTINUATION_HISTORY_ENTRIES: usize = PIECE_TO_SQUARE * PIECE_TO_SQUARE;
+const HISTORY_LIMIT: i32 = 16_384;
+const HISTORY_BONUS_CAP: i32 = 2_048;
 
 type ScoredMoves = ArrayVec<(i32, Move), MAX_MOVES>;
 type ScoredTacticalMoves = ArrayVec<(i32, i32, Move), MAX_MOVES>;
@@ -29,6 +34,7 @@ pub(crate) struct MovePicker<'a> {
     tt_move: Option<Move>,
     excluded: &'a [Move],
     special: [Option<Move>; 3],
+    prev_move: Option<Move>,
     special_index: usize,
     stage: Stage,
     scored: ScoredMoves,
@@ -40,6 +46,7 @@ impl<'a> MovePicker<'a> {
         tt_move: Option<Move>,
         killers: [Option<Move>; 2],
         countermove: Option<Move>,
+        prev_move: Option<Move>,
         excluded: &'a [Move],
     ) -> Self {
         Self {
@@ -47,6 +54,7 @@ impl<'a> MovePicker<'a> {
             tt_move,
             excluded,
             special: [killers[0], killers[1], countermove],
+            prev_move,
             special_index: 0,
             stage: Stage::Tt,
             scored: ArrayVec::new(),
@@ -106,7 +114,12 @@ impl<'a> MovePicker<'a> {
                                 .filter(|mv| Some(*mv) != self.tt_move)
                                 .filter(|mv| !self.special.contains(&Some(*mv)))
                                 .filter(|mv| !self.excluded.contains(mv))
-                                .map(|mv| (search.history[mv.from as usize][mv.to as usize], mv)),
+                                .map(|mv| {
+                                    (
+                                        search.quiet_history_score(self.board, mv, self.prev_move),
+                                        mv,
+                                    )
+                                }),
                         );
                     }
                     if let Some(mv) = select_best(&mut self.scored) {
@@ -201,34 +214,90 @@ fn tactical_score_with_see(board: &Board, mv: Move, see: i32) -> i32 {
 }
 
 impl SearchCore {
+    pub(crate) fn quiet_history_score(
+        &self,
+        board: &Board,
+        mv: Move,
+        prev_move: Option<Move>,
+    ) -> i32 {
+        self.history[mv.from as usize][mv.to as usize]
+            + continuation_index(board, prev_move, mv)
+                .map_or(0, |index| i32::from(self.continuation_history[index]))
+    }
+
     pub(crate) fn record_quiet_cutoff(
         &mut self,
+        board: &Board,
         mv: Move,
         depth: i16,
         ply: usize,
         prev_move: Option<Move>,
+        searched_quiets: &[Move],
     ) {
-        if ply < MAX_PLY {
-            if self.killers[ply][0] != Some(mv) {
-                self.killers[ply][1] = self.killers[ply][0];
-                self.killers[ply][0] = Some(mv);
+        if ply < MAX_PLY && self.killers[ply][0] != Some(mv) {
+            self.killers[ply][1] = self.killers[ply][0];
+            self.killers[ply][0] = Some(mv);
+        }
+        let bonus = i32::from(depth).pow(2).min(HISTORY_BONUS_CAP);
+        self.update_quiet_history(board, mv, prev_move, bonus);
+        for &failed in searched_quiets {
+            if failed != mv {
+                self.update_quiet_history(board, failed, prev_move, -bonus);
             }
-            let bonus = i32::from(depth).pow(2).min(2048);
-            let value = &mut self.history[mv.from as usize][mv.to as usize];
-            *value += bonus - (*value * bonus / 16_384);
         }
         if let Some(prev) = prev_move {
             self.countermove[prev.from as usize][prev.to as usize] = encode_move(mv);
         }
     }
+
+    fn update_quiet_history(
+        &mut self,
+        board: &Board,
+        mv: Move,
+        prev_move: Option<Move>,
+        bonus: i32,
+    ) {
+        update_history(&mut self.history[mv.from as usize][mv.to as usize], bonus);
+        if let Some(index) = continuation_index(board, prev_move, mv) {
+            update_continuation(&mut self.continuation_history[index], bonus);
+        }
+    }
+}
+
+fn continuation_index(board: &Board, prev_move: Option<Move>, mv: Move) -> Option<usize> {
+    let previous = prev_move?;
+    let previous_piece = board.piece_on(previous.to).or_else(|| {
+        // cozy-chess encodes castling as king-to-rook. After the move the
+        // rook square is empty, so recover the moved piece from that unique
+        // encoding instead of dropping the continuation sample.
+        (previous.from.rank() == previous.to.rank()
+            && (previous.from.file() as i8 - previous.to.file() as i8).abs() > 1)
+            .then_some(Piece::King)
+    })? as usize;
+    let candidate_piece = board.piece_on(mv.from)? as usize;
+    let previous_index = previous_piece * 64 + previous.to as usize;
+    let candidate_index = candidate_piece * 64 + mv.to as usize;
+    Some(previous_index * PIECE_TO_SQUARE + candidate_index)
+}
+
+fn update_history(value: &mut i32, bonus: i32) {
+    let bonus = bonus.clamp(-HISTORY_BONUS_CAP, HISTORY_BONUS_CAP);
+    *value += bonus - *value * bonus.abs() / HISTORY_LIMIT;
+    *value = (*value).clamp(-HISTORY_LIMIT, HISTORY_LIMIT);
+}
+
+fn update_continuation(value: &mut i16, bonus: i32) {
+    let mut widened = i32::from(*value);
+    update_history(&mut widened, bonus);
+    *value = widened as i16;
 }
 
 #[cfg(test)]
 mod tests {
     use cozy_chess::Board;
 
-    use super::{MovePicker, SearchCore};
-    use crate::search::moves::{encode_move, legal_moves};
+    use super::{CONTINUATION_HISTORY_ENTRIES, MovePicker, SearchCore, continuation_index};
+    use crate::search::moves::{encode_move, legal_moves, played};
 
     #[test]
     fn countermove_table_populates_after_a_quiet_cutoff() {
@@ -244,7 +313,7 @@ mod tests {
         let board = Board::default();
         let tt_move = "e2e4".parse().unwrap();
         let search = SearchCore::new();
-        let mut picker = MovePicker::new(&board, Some(tt_move), [None; 2], None, &[]);
+        let mut picker = MovePicker::new(&board, Some(tt_move), [None; 2], None, None, &[]);
 
         assert_eq!(picker.next(&search), Some(tt_move));
         assert!(picker.scored.is_empty());
@@ -259,7 +328,7 @@ mod tests {
         let search = SearchCore::new();
         let tt_move = "e2a6".parse().unwrap();
         let killers = [Some("e1h1".parse().unwrap()), Some("e1a1".parse().unwrap())];
-        let mut picker = MovePicker::new(&board, Some(tt_move), killers, None, &[]);
+        let mut picker = MovePicker::new(&board, Some(tt_move), killers, None, None, &[]);
         let mut picked = Vec::new();
         while let Some(mv) = picker.next(&search) {
             picked.push(encode_move(mv));
@@ -269,5 +338,33 @@ mod tests {
         legal.sort_unstable();
 
         assert_eq!(picked, legal);
+    }
+
+    #[test]
+    fn continuation_history_uses_288_kib_and_rewards_the_cutoff_reply() {
+        assert_eq!(
+            CONTINUATION_HISTORY_ENTRIES * std::mem::size_of::<i16>(),
+            288 * 1024
+        );
+
+        let root = Board::default();
+        let previous = "e2e4".parse().unwrap();
+        let board = played(&root, previous);
+        let failed = "d7d5".parse().unwrap();
+        let cutoff = "e7e5".parse().unwrap();
+        let mut search = SearchCore::new();
+        search.set_position(&board, &[root]);
+        search.record_quiet_cutoff(&board, cutoff, 8, 1, Some(previous), &[failed, cutoff]);
+
+        let cutoff_index = continuation_index(&board, Some(previous), cutoff).unwrap();
+        let failed_index = continuation_index(&board, Some(previous), failed).unwrap();
+        assert!(search.continuation_history[cutoff_index] > 0);
+        assert!(search.continuation_history[failed_index] < 0);
+        assert!(search.quiet_history_score(&board, cutoff, Some(previous)) > 0);
+        assert!(search.quiet_history_score(&board, failed, Some(previous)) < 0);
+
+        let before_decay = search.continuation_history[cutoff_index];
+        search.set_position(&played(&board, cutoff), &[]);
+        assert_eq!(search.continuation_history[cutoff_index], before_decay / 2);
     }
 }

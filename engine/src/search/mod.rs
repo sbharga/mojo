@@ -51,6 +51,11 @@ const LMR_MIN_DEPTH: i16 = 3;
 const LMR_MIN_MOVE_INDEX: usize = 3;
 const LMR_DEEP_DEPTH: i16 = 6;
 const LMR_DEEP_MOVE_INDEX: usize = 8;
+/// Continuation/main-history thresholds for pruning and LMR adjustments.
+const HISTORY_PRUNE_MAX_DEPTH: i16 = 3;
+const HISTORY_PRUNE_MIN_MOVE_INDEX: usize = 4;
+const HISTORY_BAD: i32 = -4_000;
+const HISTORY_GOOD: i32 = 4_000;
 /// Quiescence delta-pruning margin added to a capture's value before
 /// comparing against alpha.
 const DELTA_PRUNING_MARGIN: i32 = 120;
@@ -99,6 +104,7 @@ pub(crate) struct SearchCore {
     table: Box<[TTBucket]>,
     killers: [[Option<Move>; 2]; MAX_PLY],
     history: [[i32; 64]; 64],
+    continuation_history: Box<[i16]>,
     countermove: [[u16; 64]; 64],
     pv: [[u16; MAX_PLY]; MAX_PLY],
     pv_len: [u8; MAX_PLY],
@@ -124,6 +130,8 @@ impl SearchCore {
             table: vec![TTBucket::default(); TT_BUCKETS].into_boxed_slice(),
             killers: [[None; 2]; MAX_PLY],
             history: [[0; 64]; 64],
+            continuation_history: vec![0; ordering::CONTINUATION_HISTORY_ENTRIES]
+                .into_boxed_slice(),
             countermove: [[0; 64]; 64],
             pv: [[0; MAX_PLY]; MAX_PLY],
             pv_len: [0; MAX_PLY],
@@ -151,6 +159,9 @@ impl SearchCore {
                 for value in row {
                     *value /= 2;
                 }
+            }
+            for value in &mut self.continuation_history {
+                *value /= 2;
             }
             self.killers = [[None; 2]; MAX_PLY];
             self.countermove = [[0; 64]; 64];
@@ -236,7 +247,7 @@ impl SearchCore {
         let tt_best = self
             .probe(key)
             .and_then(|entry| self.valid_tt_move(board, entry));
-        let mut picker = MovePicker::new(board, tt_best, self.killers[0], None, excluded);
+        let mut picker = MovePicker::new(board, tt_best, self.killers[0], None, None, excluded);
         self.pv_len[0] = 0;
         let mut best_score = -INF;
         let mut best_move = None;
@@ -448,11 +459,19 @@ impl SearchCore {
 
         let countermove =
             prev_move.and_then(|p| decode_move(self.countermove[p.from as usize][p.to as usize]));
-        let mut picker = MovePicker::new(board, tt_best, self.killers[ply], countermove, &[]);
+        let mut picker = MovePicker::new(
+            board,
+            tt_best,
+            self.killers[ply],
+            countermove,
+            prev_move,
+            &[],
+        );
         let mut best_score = -INF;
         let mut best_move = None;
         let mut index = 0;
         let mut legal_moves_seen = 0;
+        let mut searched_quiets = MoveList::new();
 
         while let Some(mv) = picker.next(self) {
             legal_moves_seen += 1;
@@ -462,6 +481,11 @@ impl SearchCore {
             let child = played(board, mv);
             let gives_check = !child.checkers().is_empty();
             let quiet = !capture && mv.promotion.is_none();
+            let quiet_history = if quiet {
+                self.quiet_history_score(board, mv, prev_move)
+            } else {
+                0
+            };
 
             if !pv_node && !in_check && move_index > 0 && !gives_check {
                 if capture
@@ -476,6 +500,9 @@ impl SearchCore {
                         continue;
                     }
                 }
+                if quiet && history_prunable(depth, move_index, quiet_history) {
+                    continue;
+                }
                 if quiet
                     && depth <= FUTILITY_MAX_DEPTH
                     && let Some(eval) = static_eval
@@ -484,6 +511,9 @@ impl SearchCore {
                 {
                     continue;
                 }
+            }
+            if quiet {
+                searched_quiets.push(mv);
             }
             self.path.push(repetition_key(&child));
             let mut score;
@@ -500,7 +530,14 @@ impl SearchCore {
                     Some(mv),
                 );
             } else {
-                let reduction = lmr_reduction(depth, move_index, capture, in_check, gives_check);
+                let reduction = lmr_reduction(
+                    depth,
+                    move_index,
+                    capture,
+                    in_check,
+                    gives_check,
+                    quiet_history,
+                );
                 score = -self.negamax(
                     &child,
                     depth - 1 - reduction,
@@ -551,7 +588,7 @@ impl SearchCore {
             alpha = alpha.max(score);
             if alpha >= beta {
                 if !capture {
-                    self.record_quiet_cutoff(mv, depth, ply, prev_move);
+                    self.record_quiet_cutoff(board, mv, depth, ply, prev_move, &searched_quiets);
                 }
                 break;
             }
@@ -820,14 +857,30 @@ fn lmr_reduction(
     capture: bool,
     in_check: bool,
     gives_check: bool,
+    history_score: i32,
 ) -> i16 {
     if depth < LMR_MIN_DEPTH || index < LMR_MIN_MOVE_INDEX || capture || in_check || gives_check {
-        0
-    } else if depth >= LMR_DEEP_DEPTH && index >= LMR_DEEP_MOVE_INDEX {
+        return 0;
+    }
+    let base = if depth >= LMR_DEEP_DEPTH && index >= LMR_DEEP_MOVE_INDEX {
         2
     } else {
         1
-    }
+    };
+    let adjusted = if history_score >= HISTORY_GOOD {
+        base - 1
+    } else if history_score <= HISTORY_BAD {
+        base + 1
+    } else {
+        base
+    };
+    adjusted.clamp(0, depth - 1)
+}
+
+fn history_prunable(depth: i16, move_index: usize, history_score: i32) -> bool {
+    depth <= HISTORY_PRUNE_MAX_DEPTH
+        && move_index >= HISTORY_PRUNE_MIN_MOVE_INDEX
+        && history_score < HISTORY_BAD
 }
 
 fn has_non_pawn_material(board: &Board, color: Color) -> bool {
@@ -875,6 +928,17 @@ mod tests {
         assert!(first_nodes > 1);
         assert_eq!(second, first);
         assert_eq!(search.nodes, 1);
+    }
+
+    #[test]
+    fn continuation_history_adjusts_lmr_and_shallow_pruning() {
+        assert_eq!(lmr_reduction(6, 8, false, false, false, 0), 2);
+        assert_eq!(lmr_reduction(6, 8, false, false, false, HISTORY_GOOD), 1);
+        assert_eq!(lmr_reduction(6, 8, false, false, false, HISTORY_BAD), 3);
+        assert!(history_prunable(3, 4, HISTORY_BAD - 1));
+        assert!(!history_prunable(4, 4, HISTORY_BAD - 1));
+        assert!(!history_prunable(3, 3, HISTORY_BAD - 1));
+        assert!(!history_prunable(3, 4, HISTORY_BAD));
     }
 
     #[test]
