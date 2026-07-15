@@ -176,6 +176,7 @@ pub(crate) struct SearchCore {
 
 impl SearchCore {
     pub(crate) fn new() -> Self {
+        crate::kpk::initialize();
         debug_assert_eq!(std::mem::size_of::<TTEntry>(), 16);
         debug_assert_eq!(std::mem::size_of::<TTBucket>(), 64);
         debug_assert_eq!(TT_ENTRIES * std::mem::size_of::<TTEntry>(), 2 * 1024 * 1024);
@@ -487,6 +488,9 @@ impl SearchCore {
             return self.corrected_static_eval(board, raw_eval);
         }
         if self.is_draw(board) {
+            return 0;
+        }
+        if crate::kpk::probe(board) == Some(false) {
             return 0;
         }
 
@@ -960,6 +964,9 @@ impl SearchCore {
             return self.corrected_static_eval(board, raw_eval);
         }
         if self.is_draw(board) {
+            return 0;
+        }
+        if crate::kpk::probe(board) == Some(false) {
             return 0;
         }
 

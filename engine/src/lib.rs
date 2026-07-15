@@ -5,6 +5,7 @@
 
 mod eval;
 mod eval_tuned;
+mod kpk;
 mod search;
 
 #[cfg(feature = "tuning")]
