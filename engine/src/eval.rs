@@ -440,11 +440,16 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
     let mg = mg_value(score);
     let eg = eg_value(score);
     let white_score = (mg * phase + eg * (24 - phase)) / 24;
-    if board.side_to_move() == Color::White {
+    let relative_score = if board.side_to_move() == Color::White {
         white_score + tuned(TEMPO_BONUS, TEMPO)
     } else {
         -white_score + tuned(TEMPO_BONUS, TEMPO)
-    }
+    };
+    relative_score * halfmove_scale(board) / 256
+}
+
+fn halfmove_scale(board: &Board) -> i32 {
+    256 - 2 * i32::from(board.halfmove_clock().min(100))
 }
 
 fn pawn_attacks(board: &Board, color: Color) -> BitBoard {
@@ -616,6 +621,17 @@ mod evaluation_tests {
     }
 
     #[test]
+    fn halfmove_clock_damps_the_complete_evaluation() {
+        let fresh = "7k/8/8/8/8/8/Q7/6K1 w - - 0 1".parse::<Board>().unwrap();
+        let stale = "7k/8/8/8/8/8/Q7/6K1 w - - 80 41".parse::<Board>().unwrap();
+        assert_eq!(
+            evaluate(&stale),
+            evaluate(&fresh) * halfmove_scale(&stale) / 256
+        );
+        assert!(evaluate(&stale).abs() < evaluate(&fresh).abs());
+    }
+
+    #[test]
     fn safe_mobility_excludes_own_and_enemy_pawn_controlled_squares() {
         let raw = Square::A1.bitboard() | Square::B1.bitboard() | Square::C1.bitboard();
         assert_eq!(
@@ -665,6 +681,7 @@ pub mod tuning {
         direct: Box<[i32; PARAMETER_COUNT]>,
         phase: i32,
         perspective: i32,
+        rule_scale: i32,
     }
 
     impl LinearFeatures {
@@ -672,12 +689,15 @@ pub mod tuning {
             let mg = dot_f64(&self.mg, weights);
             let eg = dot_f64(&self.eg, weights);
             let direct = dot_f64(&self.direct, weights);
-            self.perspective as f64 * (mg * self.phase as f64 + eg * (24 - self.phase) as f64)
+            (self.perspective as f64 * (mg * self.phase as f64 + eg * (24 - self.phase) as f64)
                 / 24.0
-                + direct
+                + direct)
+                * self.rule_scale as f64
+                / 256.0
         }
 
         pub fn add_gradient(&self, gradient: &mut [f64; PARAMETER_COUNT], scale: f64) {
+            let scale = scale * self.rule_scale as f64 / 256.0;
             let mg_scale = scale * self.perspective as f64 * self.phase as f64 / 24.0;
             let eg_scale = scale * self.perspective as f64 * (24 - self.phase) as f64 / 24.0;
             for (index, value) in gradient.iter_mut().enumerate() {
@@ -691,8 +711,10 @@ pub mod tuning {
         fn integer_value(&self, weights: &[i32; PARAMETER_COUNT]) -> i32 {
             let mg = dot_i32(&self.mg, weights);
             let eg = dot_i32(&self.eg, weights);
-            self.perspective * (mg * self.phase + eg * (24 - self.phase)) / 24
-                + dot_i32(&self.direct, weights)
+            (self.perspective * (mg * self.phase + eg * (24 - self.phase)) / 24
+                + dot_i32(&self.direct, weights))
+                * self.rule_scale
+                / 256
         }
     }
 
@@ -903,6 +925,7 @@ pub mod tuning {
             direct,
             phase: phase.min(24),
             perspective: color_sign(board.side_to_move()),
+            rule_scale: super::halfmove_scale(board),
         }
     }
 
