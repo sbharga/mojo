@@ -21,6 +21,82 @@ const HISTORY_BONUS_CAP: i32 = 2_048;
 type ScoredMoves = ArrayVec<(i32, Move), MAX_MOVES>;
 type ScoredTacticalMoves = ArrayVec<(i32, i32, Move), MAX_MOVES>;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RootMoveStat {
+    pub(crate) mv: Move,
+    pub(crate) score: i32,
+    pub(crate) nodes: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RootCandidate {
+    mv: Move,
+    known: bool,
+    score: i32,
+    nodes: u64,
+    fallback: i32,
+}
+
+pub(crate) struct RootMovePicker {
+    candidates: ArrayVec<RootCandidate, MAX_MOVES>,
+}
+
+impl RootMovePicker {
+    pub(crate) fn new(
+        board: &Board,
+        tt_move: Option<Move>,
+        excluded: &[Move],
+        previous: &[RootMoveStat],
+        search: &SearchCore,
+    ) -> Self {
+        let candidates = legal_moves(board)
+            .into_iter()
+            .filter(|mv| !excluded.contains(mv))
+            .map(|mv| {
+                let stat = previous.iter().find(|stat| stat.mv == mv);
+                let fallback = if Some(mv) == tt_move {
+                    10_000_000
+                } else if is_capture(board, mv) || mv.promotion.is_some() {
+                    tactical_score(board, mv, search)
+                } else {
+                    search.history[mv.from as usize][mv.to as usize]
+                };
+                RootCandidate {
+                    mv,
+                    known: stat.is_some(),
+                    score: stat.map_or(i32::MIN, |stat| stat.score),
+                    nodes: stat.map_or(0, |stat| stat.nodes),
+                    fallback,
+                }
+            })
+            .collect();
+        Self { candidates }
+    }
+
+    pub(crate) fn next(&mut self) -> Option<Move> {
+        let first = *self.candidates.first()?;
+        let mut best_index = 0;
+        let mut best_key = root_key(first);
+        for (index, candidate) in self.candidates.iter().copied().enumerate().skip(1) {
+            let key = root_key(candidate);
+            if key > best_key {
+                best_index = index;
+                best_key = key;
+            }
+        }
+        Some(self.candidates.swap_remove(best_index).mv)
+    }
+}
+
+fn root_key(candidate: RootCandidate) -> (bool, i32, u64, i32) {
+    (
+        candidate.known,
+        candidate.score,
+        candidate.nodes,
+        candidate.fallback,
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
     Tt,
@@ -343,8 +419,8 @@ mod tests {
     use cozy_chess::Board;
 
     use super::{
-        CAPTURE_HISTORY_ENTRIES, CONTINUATION_HISTORY_ENTRIES, MovePicker, SearchCore,
-        capture_history_index, continuation_index,
+        CAPTURE_HISTORY_ENTRIES, CONTINUATION_HISTORY_ENTRIES, MovePicker, RootMovePicker,
+        RootMoveStat, SearchCore, capture_history_index, continuation_index,
     };
     use crate::search::moves::{encode_move, legal_moves, played};
 
@@ -397,6 +473,37 @@ mod tests {
         let mut picker = MovePicker::new(&board, None, [None; 2], None, Some(threat), None, &[]);
 
         assert_eq!(picker.next(&search), Some(threat));
+    }
+
+    #[test]
+    fn root_order_uses_score_then_subtree_effort() {
+        let board = Board::default();
+        let search = SearchCore::new();
+        let e4 = "e2e4".parse().unwrap();
+        let d4 = "d2d4".parse().unwrap();
+        let nf3 = "g1f3".parse().unwrap();
+        let stats = [
+            RootMoveStat {
+                mv: e4,
+                score: 10,
+                nodes: 100,
+            },
+            RootMoveStat {
+                mv: d4,
+                score: 10,
+                nodes: 200,
+            },
+            RootMoveStat {
+                mv: nf3,
+                score: 20,
+                nodes: 1,
+            },
+        ];
+        let mut picker = RootMovePicker::new(&board, Some(e4), &[], &stats, &search);
+
+        assert_eq!(picker.next(), Some(nf3));
+        assert_eq!(picker.next(), Some(d4));
+        assert_eq!(picker.next(), Some(e4));
     }
 
     #[test]

@@ -11,6 +11,7 @@ const result: Analysis = {
   root_fen: "old position",
   depth: 4,
   nodes: 100,
+  root_node_fraction: 0.5,
   elapsed_ms: 10,
   timed_out: false,
   lines: [{ score_cp: 20, moves: ["e2e4", "e7e5"] }],
@@ -38,6 +39,7 @@ describe("analysis roots", () => {
     const withoutRoot = {
       depth: engineResult.depth,
       nodes: engineResult.nodes,
+      root_node_fraction: engineResult.root_node_fraction,
       elapsed_ms: engineResult.elapsed_ms,
       timed_out: engineResult.timed_out,
       lines: engineResult.lines,

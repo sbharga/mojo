@@ -19,7 +19,7 @@ pub(crate) use moves::legal_moves;
 pub(crate) use moves::{fallback, played};
 
 use moves::{captured_value, decode_move, encode_move, is_capture, repetition_key, rule_key};
-use ordering::{MovePicker, QuiescencePicker};
+use ordering::{MovePicker, QuiescencePicker, RootMovePicker, RootMoveStat};
 use see::static_exchange;
 use tt::{Bound, TT_BUCKETS, TT_ENTRIES, TTBucket, TTEntry, score_from_tt, score_to_tt};
 
@@ -135,6 +135,7 @@ pub(crate) struct SearchLine {
 #[derive(Debug)]
 pub(crate) struct SearchResult {
     pub(crate) nodes: u64,
+    pub(crate) root_node_fraction: f64,
     pub(crate) timed_out: bool,
     pub(crate) lines: Vec<SearchLine>,
 }
@@ -148,6 +149,7 @@ pub(crate) struct SearchCore {
     pawn_correction: Box<[i16]>,
     material_correction: Box<[i16]>,
     static_evals: [i16; MAX_PLY],
+    root_stats: ArrayVec<RootMoveStat, MAX_MOVES>,
     countermove: [[u16; 64]; 64],
     pv: [[u16; MAX_PLY]; MAX_PLY],
     pv_len: [u8; MAX_PLY],
@@ -185,6 +187,7 @@ impl SearchCore {
             pawn_correction: vec![0; correction::CORRECTION_HISTORY_ENTRIES].into_boxed_slice(),
             material_correction: vec![0; correction::CORRECTION_HISTORY_ENTRIES].into_boxed_slice(),
             static_evals: [i16::MIN; MAX_PLY],
+            root_stats: ArrayVec::new(),
             countermove: [[0; 64]; 64],
             pv: [[0; MAX_PLY]; MAX_PLY],
             pv_len: [0; MAX_PLY],
@@ -233,6 +236,7 @@ impl SearchCore {
             }
             self.killers = [[None; 2]; MAX_PLY];
             self.countermove = [[0; 64]; 64];
+            self.root_stats.clear();
         }
         self.prior_positions.clear();
         self.prior_positions
@@ -262,6 +266,7 @@ impl SearchCore {
         if self.is_draw(board) {
             return SearchResult {
                 nodes: 0,
+                root_node_fraction: 0.0,
                 timed_out: false,
                 lines: Vec::new(),
             };
@@ -317,8 +322,10 @@ impl SearchCore {
             lines.push(line);
         }
 
+        let root_node_fraction = self.root_node_fraction(lines.first());
         SearchResult {
             nodes: self.nodes,
+            root_node_fraction,
             timed_out: self.timed_out,
             lines,
         }
@@ -337,17 +344,19 @@ impl SearchCore {
         let tt_best = self
             .probe(key)
             .and_then(|entry| self.valid_tt_move(board, entry));
-        let mut picker =
-            MovePicker::new(board, tt_best, self.killers[0], None, None, None, excluded);
+        let previous_stats = self.root_stats.clone();
+        let mut picker = RootMovePicker::new(board, tt_best, excluded, &previous_stats, self);
         self.pv_len[0] = 0;
         let mut best_score = -INF;
         let mut best_move = None;
         let mut index = 0;
+        let mut current_stats: ArrayVec<RootMoveStat, MAX_MOVES> = ArrayVec::new();
 
-        while let Some(mv) = picker.next(self) {
+        while let Some(mv) = picker.next() {
             if self.expired() {
                 break;
             }
+            let subtree_start = self.nodes;
             let child = played(board, mv);
             self.path.push(repetition_key(&child));
             let mut score = if index == 0 {
@@ -400,6 +409,11 @@ impl SearchCore {
                 break;
             }
             score = score.clamp(-INF, INF);
+            current_stats.push(RootMoveStat {
+                mv,
+                score,
+                nodes: self.nodes - subtree_start,
+            });
             if score > best_score {
                 best_score = score;
                 best_move = Some(mv);
@@ -412,19 +426,23 @@ impl SearchCore {
             index += 1;
         }
 
+        let bound = if best_score <= original_alpha {
+            Bound::Upper
+        } else if best_score >= beta {
+            Bound::Lower
+        } else {
+            Bound::Exact
+        };
+        if excluded.is_empty() && !self.timed_out && bound == Bound::Exact {
+            self.root_stats = current_stats;
+        }
+
         best_move.map(|best_move| {
             // Only the primary root search represents the full legal move set.
             // Storing an excluded MultiPV search here would make its second- or
             // third-best move displace the principal move before the next
             // iterative-deepening step.
             if excluded.is_empty() && !self.timed_out {
-                let bound = if best_score <= original_alpha {
-                    Bound::Upper
-                } else if best_score >= beta {
-                    Bound::Lower
-                } else {
-                    Bound::Exact
-                };
                 self.store(
                     key,
                     depth,
@@ -1123,6 +1141,20 @@ impl SearchCore {
         })
     }
 
+    fn root_node_fraction(&self, primary: Option<&SearchLine>) -> f64 {
+        let Some(best_move) = primary.and_then(|line| line.moves.first()) else {
+            return 0.0;
+        };
+        let total: u64 = self.root_stats.iter().map(|stat| stat.nodes).sum();
+        if total == 0 {
+            return 0.0;
+        }
+        self.root_stats
+            .iter()
+            .find(|stat| stat.mv == *best_move)
+            .map_or(0.0, |stat| stat.nodes as f64 / total as f64)
+    }
+
     fn store(
         &mut self,
         key: u64,
@@ -1390,6 +1422,9 @@ mod tests {
         assert_eq!(entry.depth, 4);
         assert_eq!(entry.bound(), Bound::Exact);
         assert_eq!(decode_move(entry.best), Some(primary));
+        assert_eq!(search.root_stats.len(), legal_moves(&board).len());
+        assert!(result.root_node_fraction > 0.0);
+        assert!(result.root_node_fraction <= 1.0);
     }
 
     #[test]
