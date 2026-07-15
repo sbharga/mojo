@@ -105,6 +105,7 @@ pub(crate) struct SearchCore {
     killers: [[Option<Move>; 2]; MAX_PLY],
     history: [[i32; 64]; 64],
     continuation_history: Box<[i16]>,
+    capture_history: Box<[i16]>,
     countermove: [[u16; 64]; 64],
     pv: [[u16; MAX_PLY]; MAX_PLY],
     pv_len: [u8; MAX_PLY],
@@ -132,6 +133,7 @@ impl SearchCore {
             history: [[0; 64]; 64],
             continuation_history: vec![0; ordering::CONTINUATION_HISTORY_ENTRIES]
                 .into_boxed_slice(),
+            capture_history: vec![0; ordering::CAPTURE_HISTORY_ENTRIES].into_boxed_slice(),
             countermove: [[0; 64]; 64],
             pv: [[0; MAX_PLY]; MAX_PLY],
             pv_len: [0; MAX_PLY],
@@ -161,6 +163,9 @@ impl SearchCore {
                 }
             }
             for value in &mut self.continuation_history {
+                *value /= 2;
+            }
+            for value in &mut self.capture_history {
                 *value /= 2;
             }
             self.killers = [[None; 2]; MAX_PLY];
@@ -472,6 +477,7 @@ impl SearchCore {
         let mut index = 0;
         let mut legal_moves_seen = 0;
         let mut searched_quiets = MoveList::new();
+        let mut searched_captures = MoveList::new();
 
         while let Some(mv) = picker.next(self) {
             legal_moves_seen += 1;
@@ -486,11 +492,16 @@ impl SearchCore {
             } else {
                 0
             };
+            let capture_history = if capture {
+                self.capture_history_score(board, mv)
+            } else {
+                0
+            };
 
             if !pv_node && !in_check && move_index > 0 && !gives_check {
                 if capture
                     && depth <= SEE_PRUNE_MAX_DEPTH
-                    && static_exchange(board, mv) < -SEE_PRUNE_MARGIN_PER_PLY * i32::from(depth)
+                    && static_exchange(board, mv) < capture_see_threshold(depth, capture_history)
                 {
                     continue;
                 }
@@ -514,6 +525,8 @@ impl SearchCore {
             }
             if quiet {
                 searched_quiets.push(mv);
+            } else if capture {
+                searched_captures.push(mv);
             }
             self.path.push(repetition_key(&child));
             let mut score;
@@ -587,7 +600,9 @@ impl SearchCore {
             }
             alpha = alpha.max(score);
             if alpha >= beta {
-                if !capture {
+                if capture {
+                    self.record_capture_cutoff(board, mv, depth, &searched_captures);
+                } else {
                     self.record_quiet_cutoff(board, mv, depth, ply, prev_move, &searched_quiets);
                 }
                 break;
@@ -883,6 +898,10 @@ fn history_prunable(depth: i16, move_index: usize, history_score: i32) -> bool {
         && history_score < HISTORY_BAD
 }
 
+fn capture_see_threshold(depth: i16, capture_history: i32) -> i32 {
+    -SEE_PRUNE_MARGIN_PER_PLY * i32::from(depth) - capture_history.max(0) / 64
+}
+
 fn has_non_pawn_material(board: &Board, color: Color) -> bool {
     !(board.colors(color)
         & (board.pieces(Piece::Knight)
@@ -939,6 +958,9 @@ mod tests {
         assert!(!history_prunable(4, 4, HISTORY_BAD - 1));
         assert!(!history_prunable(3, 3, HISTORY_BAD - 1));
         assert!(!history_prunable(3, 4, HISTORY_BAD));
+        assert_eq!(capture_see_threshold(2, 0), -180);
+        assert_eq!(capture_see_threshold(2, 6_400), -280);
+        assert_eq!(capture_see_threshold(2, -6_400), -180);
     }
 
     #[test]

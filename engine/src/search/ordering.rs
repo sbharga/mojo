@@ -14,6 +14,7 @@ use super::{MAX_MOVES, MAX_PLY, SearchCore};
 
 const PIECE_TO_SQUARE: usize = 6 * 64;
 pub(crate) const CONTINUATION_HISTORY_ENTRIES: usize = PIECE_TO_SQUARE * PIECE_TO_SQUARE;
+pub(crate) const CAPTURE_HISTORY_ENTRIES: usize = 12 * 64 * 6;
 const HISTORY_LIMIT: i32 = 16_384;
 const HISTORY_BONUS_CAP: i32 = 2_048;
 
@@ -79,7 +80,7 @@ impl<'a> MovePicker<'a> {
                                 .into_iter()
                                 .filter(|mv| Some(*mv) != self.tt_move)
                                 .filter(|mv| !self.excluded.contains(mv))
-                                .map(|mv| (tactical_score(self.board, mv), mv)),
+                                .map(|mv| (tactical_score(self.board, mv, search), mv)),
                         );
                     }
                     if let Some(mv) = select_best(&mut self.scored) {
@@ -162,7 +163,7 @@ impl QuiescencePicker {
                         search.history[mv.from as usize][mv.to as usize]
                     }
                 } else {
-                    tactical_score_with_see(board, mv, see)
+                    tactical_score_with_see(board, mv, see, search.capture_history_score(board, mv))
                 };
                 (score, see, mv)
             })
@@ -196,24 +197,59 @@ fn best_index<T>(items: &[T], score: impl Fn(&T) -> i32) -> Option<usize> {
     Some(best)
 }
 
-fn tactical_score(board: &Board, mv: Move) -> i32 {
+fn tactical_score(board: &Board, mv: Move, search: &SearchCore) -> i32 {
     let see = if is_capture(board, mv) {
         static_exchange(board, mv)
     } else {
         0
     };
-    tactical_score_with_see(board, mv, see)
+    tactical_score_with_see(board, mv, see, search.capture_history_score(board, mv))
 }
 
-fn tactical_score_with_see(board: &Board, mv: Move, see: i32) -> i32 {
+fn tactical_score_with_see(board: &Board, mv: Move, see: i32, capture_history: i32) -> i32 {
     if is_capture(board, mv) {
-        1_000_000 + see * 32 + captured_value(board, mv)
+        let see_class = match see.cmp(&0) {
+            std::cmp::Ordering::Greater => 200_000,
+            std::cmp::Ordering::Equal => 100_000,
+            std::cmp::Ordering::Less => 0,
+        };
+        1_000_000
+            + see_class
+            + capture_history
+            + captured_value(board, mv)
+            + mv.promotion.map_or(0, piece_value)
     } else {
         950_000 + mv.promotion.map_or(0, piece_value)
     }
 }
 
 impl SearchCore {
+    pub(crate) fn capture_history_score(&self, board: &Board, mv: Move) -> i32 {
+        capture_history_index(board, mv).map_or(0, |index| i32::from(self.capture_history[index]))
+    }
+
+    pub(crate) fn record_capture_cutoff(
+        &mut self,
+        board: &Board,
+        mv: Move,
+        depth: i16,
+        searched_captures: &[Move],
+    ) {
+        let bonus = i32::from(depth).pow(2).min(HISTORY_BONUS_CAP);
+        self.update_capture_history(board, mv, bonus);
+        for &failed in searched_captures {
+            if failed != mv {
+                self.update_capture_history(board, failed, -bonus);
+            }
+        }
+    }
+
+    fn update_capture_history(&mut self, board: &Board, mv: Move, bonus: i32) {
+        if let Some(index) = capture_history_index(board, mv) {
+            update_continuation(&mut self.capture_history[index], bonus);
+        }
+    }
+
     pub(crate) fn quiet_history_score(
         &self,
         board: &Board,
@@ -280,6 +316,15 @@ fn continuation_index(board: &Board, prev_move: Option<Move>, mv: Move) -> Optio
     Some(previous_index * PIECE_TO_SQUARE + candidate_index)
 }
 
+fn capture_history_index(board: &Board, mv: Move) -> Option<usize> {
+    if !is_capture(board, mv) {
+        return None;
+    }
+    let color_piece = board.side_to_move() as usize * 6 + board.piece_on(mv.from)? as usize;
+    let captured = board.piece_on(mv.to).unwrap_or(Piece::Pawn) as usize;
+    Some((color_piece * 64 + mv.to as usize) * 6 + captured)
+}
+
 fn update_history(value: &mut i32, bonus: i32) {
     let bonus = bonus.clamp(-HISTORY_BONUS_CAP, HISTORY_BONUS_CAP);
     *value += bonus - *value * bonus.abs() / HISTORY_LIMIT;
@@ -296,7 +341,10 @@ fn update_continuation(value: &mut i16, bonus: i32) {
 mod tests {
     use cozy_chess::Board;
 
-    use super::{CONTINUATION_HISTORY_ENTRIES, MovePicker, SearchCore, continuation_index};
+    use super::{
+        CAPTURE_HISTORY_ENTRIES, CONTINUATION_HISTORY_ENTRIES, MovePicker, SearchCore,
+        capture_history_index, continuation_index,
+    };
     use crate::search::moves::{encode_move, legal_moves, played};
 
     #[test]
@@ -366,5 +414,32 @@ mod tests {
         let before_decay = search.continuation_history[cutoff_index];
         search.set_position(&played(&board, cutoff), &[]);
         assert_eq!(search.continuation_history[cutoff_index], before_decay / 2);
+    }
+
+    #[test]
+    fn capture_history_uses_9_kib_and_penalizes_failed_captures() {
+        assert_eq!(
+            CAPTURE_HISTORY_ENTRIES * std::mem::size_of::<i16>(),
+            9 * 1024
+        );
+        let board = "4k3/8/8/2p1p3/3Q4/8/8/4K3 w - - 0 1"
+            .parse::<Board>()
+            .unwrap();
+        let failed = "d4c5".parse().unwrap();
+        let cutoff = "d4e5".parse().unwrap();
+        let mut search = SearchCore::new();
+        search.set_position(&board, &[]);
+        search.record_capture_cutoff(&board, cutoff, 8, &[failed, cutoff]);
+
+        let cutoff_index = capture_history_index(&board, cutoff).unwrap();
+        let failed_index = capture_history_index(&board, failed).unwrap();
+        assert!(search.capture_history[cutoff_index] > 0);
+        assert!(search.capture_history[failed_index] < 0);
+        assert!(search.capture_history_score(&board, cutoff) > 0);
+        assert!(search.capture_history_score(&board, failed) < 0);
+
+        let before_decay = search.capture_history[cutoff_index];
+        search.set_position(&played(&board, cutoff), &[]);
+        assert_eq!(search.capture_history[cutoff_index], before_decay / 2);
     }
 }
