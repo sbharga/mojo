@@ -71,6 +71,7 @@ const IIR_MIN_DEPTH: i16 = 4;
 /// static eval already exceeds beta by this margin per ply, cut off early.
 const RFP_MAX_DEPTH: i16 = 8;
 const RFP_MARGIN_PER_PLY: i32 = 120;
+const RFP_NOT_IMPROVING_MARGIN_REDUCTION: i32 = 40;
 /// SEE pruning of clearly-losing captures in the main search (not just
 /// quiescence): at shallow depth, skip a capture whose SEE falls below
 /// `-SEE_PRUNE_MARGIN_PER_PLY * depth`.
@@ -85,6 +86,7 @@ const FUTILITY_MARGIN_PER_PLY: i32 = 100;
 /// once the move count exceeds a depth-scaled threshold.
 const LMP_MAX_DEPTH: i16 = 4;
 const LMP_BASE_MOVE_COUNT: usize = 4;
+const LMP_NOT_IMPROVING_REDUCTION: usize = 2;
 /// Razoring: at shallow depth, if the static eval falls this far below alpha,
 /// drop straight into quiescence and trust it (the fail-low mirror of RFP).
 const RAZOR_MAX_DEPTH: i16 = 2;
@@ -110,6 +112,7 @@ struct LmrContext {
     pv_node: bool,
     cut_node: bool,
     tt_move_capture: bool,
+    improving: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -133,6 +136,7 @@ pub(crate) struct SearchCore {
     capture_history: Box<[i16]>,
     pawn_correction: Box<[i16]>,
     material_correction: Box<[i16]>,
+    static_evals: [i16; MAX_PLY],
     countermove: [[u16; 64]; 64],
     pv: [[u16; MAX_PLY]; MAX_PLY],
     pv_len: [u8; MAX_PLY],
@@ -163,6 +167,7 @@ impl SearchCore {
             capture_history: vec![0; ordering::CAPTURE_HISTORY_ENTRIES].into_boxed_slice(),
             pawn_correction: vec![0; correction::CORRECTION_HISTORY_ENTRIES].into_boxed_slice(),
             material_correction: vec![0; correction::CORRECTION_HISTORY_ENTRIES].into_boxed_slice(),
+            static_evals: [i16::MIN; MAX_PLY],
             countermove: [[0; 64]; 64],
             pv: [[0; MAX_PLY]; MAX_PLY],
             pv_len: [0; MAX_PLY],
@@ -223,6 +228,9 @@ impl SearchCore {
         self.deadline_ms = crate::now_ms() + time_limit_ms.max(5.0);
         self.path.clear();
         self.path.push(repetition_key(board));
+        self.static_evals.fill(i16::MIN);
+        self.static_evals[0] =
+            compact_static_eval(self.corrected_static_eval(board, evaluate(board)));
         self.null_boundary = None;
         if self.is_draw(board) {
             return SearchResult {
@@ -506,6 +514,10 @@ impl SearchCore {
             )
         };
         let mut static_eval = raw_static_eval.map(|raw| self.corrected_static_eval(board, raw));
+        let improving = static_eval.and_then(|eval| self.record_static_eval(ply, eval));
+        if static_eval.is_none() {
+            self.static_evals[ply] = i16::MIN;
+        }
         if !pv_node
             && !in_check
             && excluded_move.is_none()
@@ -514,7 +526,7 @@ impl SearchCore {
         {
             let eval = *static_eval.get_or_insert_with(|| evaluate(board));
             static_eval = Some(eval);
-            if eval - RFP_MARGIN_PER_PLY * i32::from(depth) >= beta {
+            if eval - rfp_margin(depth, improving) >= beta {
                 return if board.generate_moves(|_| true) {
                     eval
                 } else {
@@ -620,7 +632,7 @@ impl SearchCore {
                 }
                 if quiet && depth <= LMP_MAX_DEPTH {
                     let depth = depth as usize;
-                    if move_index >= LMP_BASE_MOVE_COUNT + depth * depth {
+                    if move_index >= lmp_threshold(depth, improving) {
                         continue;
                     }
                 }
@@ -673,6 +685,7 @@ impl SearchCore {
                         pv_node,
                         cut_node,
                         tt_move_capture,
+                        improving,
                     },
                 );
                 score = -self.negamax(
@@ -922,6 +935,15 @@ impl SearchCore {
         self.timed_out
     }
 
+    fn record_static_eval(&mut self, ply: usize, eval: i32) -> Option<bool> {
+        let previous = ply
+            .checked_sub(2)
+            .map(|previous_ply| self.static_evals[previous_ply])
+            .filter(|previous| *previous != i16::MIN);
+        self.static_evals[ply] = compact_static_eval(eval);
+        previous.map(|previous| eval > i32::from(previous))
+    }
+
     fn update_pv(&mut self, ply: usize, mv: Move) {
         if ply >= MAX_PLY - 1 {
             return;
@@ -1026,7 +1048,34 @@ fn lmr_reduction(depth: i16, index: usize, context: LmrContext) -> i16 {
     reduction += i16::from(context.tt_move_capture);
     reduction += i16::from(context.history_score <= HISTORY_BAD);
     reduction -= i16::from(context.history_score >= HISTORY_GOOD);
+    match context.improving {
+        Some(true) => reduction -= 1,
+        Some(false) => reduction += 1,
+        None => {}
+    }
     reduction.clamp(0, depth - 1)
+}
+
+fn rfp_margin(depth: i16, improving: Option<bool>) -> i32 {
+    let per_ply = if improving == Some(false) {
+        RFP_MARGIN_PER_PLY - RFP_NOT_IMPROVING_MARGIN_REDUCTION
+    } else {
+        RFP_MARGIN_PER_PLY
+    };
+    per_ply * i32::from(depth)
+}
+
+fn lmp_threshold(depth: usize, improving: Option<bool>) -> usize {
+    let threshold = LMP_BASE_MOVE_COUNT + depth * depth;
+    if improving == Some(false) {
+        threshold.saturating_sub(LMP_NOT_IMPROVING_REDUCTION)
+    } else {
+        threshold
+    }
+}
+
+fn compact_static_eval(eval: i32) -> i16 {
+    eval.clamp(i32::from(i16::MIN) + 1, i32::from(i16::MAX)) as i16
 }
 
 const fn build_lmr_table() -> [[u8; LMR_TABLE_MOVES]; LMR_TABLE_DEPTHS] {
@@ -1223,6 +1272,28 @@ mod tests {
             ),
             3
         );
+        assert_eq!(
+            lmr_reduction(
+                6,
+                8,
+                LmrContext {
+                    improving: Some(true),
+                    ..neutral
+                }
+            ),
+            1
+        );
+        assert_eq!(
+            lmr_reduction(
+                6,
+                8,
+                LmrContext {
+                    improving: Some(false),
+                    ..neutral
+                }
+            ),
+            3
+        );
         assert!(history_prunable(3, 4, HISTORY_BAD - 1));
         assert!(!history_prunable(4, 4, HISTORY_BAD - 1));
         assert!(!history_prunable(3, 3, HISTORY_BAD - 1));
@@ -1230,6 +1301,23 @@ mod tests {
         assert_eq!(capture_see_threshold(2, 0), -180);
         assert_eq!(capture_see_threshold(2, 6_400), -280);
         assert_eq!(capture_see_threshold(2, -6_400), -180);
+    }
+
+    #[test]
+    fn improving_eval_stack_tightens_pruning_when_the_position_worsens() {
+        let mut search = SearchCore::new();
+        assert_eq!(std::mem::size_of_val(&search.static_evals), 128);
+        search.static_evals[0] = 100;
+        assert_eq!(search.record_static_eval(2, 101), Some(true));
+        assert_eq!(search.record_static_eval(4, 90), Some(false));
+        assert_eq!(search.record_static_eval(1, 0), None);
+
+        assert_eq!(rfp_margin(3, Some(true)), 360);
+        assert_eq!(rfp_margin(3, None), 360);
+        assert_eq!(rfp_margin(3, Some(false)), 240);
+        assert_eq!(lmp_threshold(3, Some(true)), 13);
+        assert_eq!(lmp_threshold(3, None), 13);
+        assert_eq!(lmp_threshold(3, Some(false)), 11);
     }
 
     #[test]
