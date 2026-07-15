@@ -24,3 +24,9 @@ jobs:
       - run: cargo install wasm-pack --locked
       - run: npm run build --prefix web
       - run: npm run check --prefix web
+      - run: cargo install twiggy --locked
+      - run: twiggy top -n 20 engine/pkg/mojo_engine_bg.wasm > twiggy-top.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-size-profile
+          path: twiggy-top.txt

@@ -51,7 +51,7 @@ Rust:
 - `cargo clippy --manifest-path engine/Cargo.toml --all-targets -- -D warnings` and `cargo fmt --check --manifest-path engine/Cargo.toml` — both run in CI and must pass. `unsafe_code` is `forbid`-lint at the crate level.
 - To run a single Rust test: `cargo test --manifest-path engine/Cargo.toml <test_name>`.
 
-CI (`.github/workflows/ci.yml`) runs, in order: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `npm ci`, `wasm-pack` install, `npm run build`, `npm run check`. Match this sequence locally before pushing.
+CI (`.github/workflows/ci.yml`) runs, in order: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `npm ci`, `wasm-pack` install, `npm run build`, `npm run check`, then uploads a Twiggy size profile. Match the verification sequence locally before pushing.
 
 ## Architecture
 
@@ -59,8 +59,7 @@ CI (`.github/workflows/ci.yml`) runs, in order: `cargo fmt --check`, `cargo clip
 
 - `engine/` is the Rust search engine. `engine/src/lib.rs` is the `wasm-bindgen`
   surface: it exposes a reusable `Engine` struct (`set_position`,
-  `analyze_depth`, `fallback_move`) plus stateless `analyze_step` /
-  `fallback_move` free functions. All engine I/O is plain data (FENs, UCI move
+  `analyze_depth`, `fallback_move`). All engine I/O is plain data (FENs, UCI move
   strings, plain result structs) — the JS/worker side never depends on Rust
   internals, and the Wasm boundary only understands serializable values.
 - `engine/src/search.rs` holds `SearchCore`: iterative-deepening alpha-beta
@@ -86,11 +85,11 @@ CI (`.github/workflows/ci.yml`) runs, in order: `cargo fmt --check`, `cargo clip
   regenerated (`npm run build:engine`) after any `engine/src` change; it is
   not auto-rebuilt by `npm run check` or `npm test`.
 - `engine/Cargo.toml`'s `[profile.release]` (`codegen-units = 1`, `lto =
-  "fat"`, `panic = "abort"`, `strip = true`) plus `wasm-opt -O
-  --enable-bulk-memory --enable-nontrapping-float-to-int` on the `wasm-pack`
-  output are what keep the binary
-  small and fast in-browser; `bench:engine` reports the resulting Wasm size
-  alongside search speed so regressions in either are visible together.
+  "fat"`, `panic = "abort"`, `strip = true`) plus `wasm-opt -O`, required
+  feature enables, and metadata stripping keep the binary small and fast.
+  `bench:engine` reports raw, gzip, and Brotli size alongside search speed. CI
+  enforces a 225 KB gzip budget per artifact and uploads a Twiggy profile so
+  regressions are attributable.
 
 ### Worker protocol (web/src/engine/)
 

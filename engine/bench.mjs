@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { gzipSync } from 'node:zlib'
+import { brotliCompressSync, constants, gzipSync } from 'node:zlib'
 import { Engine, initSync } from './pkg/mojo_engine.js'
 
 const wasmBytes = readFileSync(new URL('./pkg/mojo_engine_bg.wasm', import.meta.url))
@@ -74,8 +74,14 @@ console.table(results)
 console.log({
   baseline_wasm_raw_bytes: wasmBytes.byteLength,
   baseline_wasm_gzip_bytes: gzipSync(wasmBytes).byteLength,
+  baseline_wasm_brotli_bytes: brotliCompressSync(wasmBytes, {
+    params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
+  }).byteLength,
   simd_wasm_raw_bytes: simdWasmBytes.byteLength,
   simd_wasm_gzip_bytes: gzipSync(simdWasmBytes).byteLength,
+  simd_wasm_brotli_bytes: brotliCompressSync(simdWasmBytes, {
+    params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
+  }).byteLength,
   initial_memory_bytes: initialMemory,
   peak_memory_bytes: peakMemory,
 })

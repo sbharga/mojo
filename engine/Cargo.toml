@@ -42,4 +42,4 @@ panic = "abort"
 strip = true
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-O", "--enable-bulk-memory", "--enable-nontrapping-float-to-int", "--enable-simd"]
+wasm-opt = ["-O", "--enable-bulk-memory", "--enable-nontrapping-float-to-int", "--enable-simd", "--strip-producers", "--strip-target-features"]

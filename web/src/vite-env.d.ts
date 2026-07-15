@@ -20,13 +20,6 @@ declare module "../../../engine/pkg/mojo_engine.js" {
     fallback_move(): string | undefined;
     free(): void;
   }
-  export function analyze_step(
-    fen: string,
-    depth: number,
-    multiPv: number,
-    timeLimitMs: number,
-  ): AnalysisResult;
-  export function fallback_move(fen: string): string | undefined;
   interface AnalysisLine {
     score_cp: number | null;
     mate_in: number | null;
