@@ -40,8 +40,22 @@ const MINOR_MAJOR_THREAT_EG: usize = 852;
 const HANGING_THREAT_MG: usize = 853;
 const HANGING_THREAT_EG: usize = 854;
 
-fn tuned(base: i32, parameter: usize) -> i32 {
-    base + i32::from(DELTAS[parameter])
+const fn tuned(base: i32, parameter: usize) -> i32 {
+    base + DELTAS[parameter] as i32
+}
+
+type PackedScore = i32;
+
+const fn pack(mg: i32, eg: i32) -> PackedScore {
+    (eg << 16) + mg
+}
+
+fn mg_value(score: PackedScore) -> i32 {
+    i32::from(score as i16)
+}
+
+fn eg_value(score: PackedScore) -> i32 {
+    i32::from((score.wrapping_add(0x8000) >> 16) as i16)
 }
 
 // Tapered PeSTO-style piece values (indexed by `Piece as usize`), used only
@@ -118,6 +132,45 @@ const EG_PST: [[i16; 64]; 6] = [
     [-74,-35,-18,-18,-11,15,4,-17,-12,17,14,17,17,38,23,11,10,17,23,15,20,45,44,13,-8,22,24,27,26,33,26,3,-18,-4,21,24,27,23,9,-11,-19,-3,11,21,23,16,7,-9,-27,-11,4,13,14,4,-5,-17,-53,-34,-21,-11,-28,-14,-24,-43],
 ];
 
+const PACKED_VALUE: [PackedScore; 6] = build_packed_values();
+const PACKED_PST: [[PackedScore; 64]; 6] = build_packed_pst();
+
+const fn build_packed_values() -> [PackedScore; 6] {
+    let mut values = [0; 6];
+    let mut piece = 0;
+    while piece < 6 {
+        values[piece] = pack(
+            tuned(MG_VALUE[piece], MG_VALUE_START + piece),
+            tuned(EG_VALUE[piece], EG_VALUE_START + piece),
+        );
+        piece += 1;
+    }
+    values
+}
+
+const fn build_packed_pst() -> [[PackedScore; 64]; 6] {
+    let mut table = [[0; 64]; 6];
+    let mut piece = 0;
+    while piece < 6 {
+        let mut square = 0;
+        while square < 64 {
+            table[piece][square] = pack(
+                tuned(
+                    MG_PST[piece][square] as i32,
+                    MG_PST_START + piece * 64 + square,
+                ),
+                tuned(
+                    EG_PST[piece][square] as i32,
+                    EG_PST_START + piece * 64 + square,
+                ),
+            );
+            square += 1;
+        }
+        piece += 1;
+    }
+    table
+}
+
 // Simple, phase-independent piece values for exchange-sequence comparison
 // (SEE, capture ordering, capture-value pruning in search.rs). Deliberately
 // separate from `MG_VALUE`/`EG_VALUE` above; see the comment there.
@@ -131,8 +184,7 @@ pub(crate) fn evaluate(board: &Board) -> i32 {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PawnStructure {
-    mg: i32,
-    eg: i32,
+    score: PackedScore,
     passers: [BitBoard; 2],
 }
 
@@ -165,8 +217,12 @@ pub(crate) fn pawn_structure(board: &Board) -> PawnStructure {
         }
         for count in file_counts {
             if count > 1 {
-                structure.mg -= sign * (count - 1) * tuned(DOUBLED_PAWN_PENALTY_MG, DOUBLED_MG);
-                structure.eg -= sign * (count - 1) * tuned(DOUBLED_PAWN_PENALTY_EG, DOUBLED_EG);
+                structure.score -= sign
+                    * (count - 1)
+                    * pack(
+                        tuned(DOUBLED_PAWN_PENALTY_MG, DOUBLED_MG),
+                        tuned(DOUBLED_PAWN_PENALTY_EG, DOUBLED_EG),
+                    );
             }
         }
         for pawn in pawns {
@@ -175,8 +231,11 @@ pub(crate) fn pawn_structure(board: &Board) -> PawnStructure {
             let isolated = (file == 0 || file_counts[(file - 1) as usize] == 0)
                 && (file == 7 || file_counts[(file + 1) as usize] == 0);
             if isolated {
-                structure.mg -= sign * tuned(ISOLATED_PAWN_PENALTY_MG, ISOLATED_MG);
-                structure.eg -= sign * tuned(ISOLATED_PAWN_PENALTY_EG, ISOLATED_EG);
+                structure.score -= sign
+                    * pack(
+                        tuned(ISOLATED_PAWN_PENALTY_MG, ISOLATED_MG),
+                        tuned(ISOLATED_PAWN_PENALTY_EG, ISOLATED_EG),
+                    );
             }
             let passed = enemy_pawns.into_iter().all(|enemy| {
                 let close_file = ((enemy.file() as i32) - file).abs() <= 1;
@@ -194,10 +253,11 @@ pub(crate) fn pawn_structure(board: &Board) -> PawnStructure {
                 } else {
                     7 - rank
                 } as usize;
-                structure.mg +=
-                    sign * tuned(MG_PASSER[relative_rank], MG_PASSER_START + relative_rank);
-                structure.eg +=
-                    sign * tuned(EG_PASSER[relative_rank], EG_PASSER_START + relative_rank);
+                structure.score += sign
+                    * pack(
+                        tuned(MG_PASSER[relative_rank], MG_PASSER_START + relative_rank),
+                        tuned(EG_PASSER[relative_rank], EG_PASSER_START + relative_rank),
+                    );
             }
         }
     }
@@ -205,8 +265,7 @@ pub(crate) fn pawn_structure(board: &Board) -> PawnStructure {
 }
 
 pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) -> i32 {
-    let mut mg = 0;
-    let mut eg = 0;
+    let mut score: PackedScore = 0;
     let mut phase = 0;
     let occupied = board.occupied();
     let king_zone = [
@@ -233,18 +292,7 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
                     square as usize
                 };
                 let piece_index = piece as usize;
-                mg += sign
-                    * (tuned(MG_VALUE[piece_index], MG_VALUE_START + piece_index)
-                        + tuned(
-                            i32::from(MG_PST[piece_index][index]),
-                            MG_PST_START + piece_index * 64 + index,
-                        ));
-                eg += sign
-                    * (tuned(EG_VALUE[piece_index], EG_VALUE_START + piece_index)
-                        + tuned(
-                            i32::from(EG_PST[piece_index][index]),
-                            EG_PST_START + piece_index * 64 + index,
-                        ));
+                score += sign * (PACKED_VALUE[piece_index] + PACKED_PST[piece_index][index]);
                 phase += PHASE[piece as usize];
 
                 let own = board.colors(color);
@@ -272,10 +320,9 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
                     Piece::Queen => (QUEEN_MOBILITY_WEIGHT, MOBILITY_START + 3),
                     _ => unreachable!("only sliding and leaping pieces have attacks"),
                 };
-                let mobility = safe_mobility(raw_attacks, own, pawn_attacks[!color as usize])
-                    * tuned(mobility_weight, mobility_parameter);
-                mg += sign * mobility;
-                eg += sign * mobility;
+                let mobility = safe_mobility(raw_attacks, own, pawn_attacks[!color as usize]);
+                let mobility_weight = tuned(mobility_weight, mobility_parameter);
+                score += sign * mobility * pack(mobility_weight, mobility_weight);
 
                 let attack_units = match piece {
                     Piece::Knight | Piece::Bishop => 2,
@@ -315,19 +362,21 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
             undefended_zone,
             shield,
         );
-        mg += sign * tuned(KING_ATTACK_CURVE[units], KING_ATTACK_CURVE_START + units);
-        mg += sign
-            * (pawn_targets * tuned(PAWN_THREAT_BONUS_MG, PAWN_THREAT_MG)
-                + minor_major_targets * tuned(MINOR_MAJOR_THREAT_BONUS_MG, MINOR_MAJOR_THREAT_MG)
-                + hanging_targets * tuned(HANGING_THREAT_BONUS_MG, HANGING_THREAT_MG));
-        eg += sign
-            * (pawn_targets * tuned(PAWN_THREAT_BONUS_EG, PAWN_THREAT_EG)
-                + minor_major_targets * tuned(MINOR_MAJOR_THREAT_BONUS_EG, MINOR_MAJOR_THREAT_EG)
-                + hanging_targets * tuned(HANGING_THREAT_BONUS_EG, HANGING_THREAT_EG));
+        score += sign
+            * pack(
+                tuned(KING_ATTACK_CURVE[units], KING_ATTACK_CURVE_START + units)
+                    + pawn_targets * tuned(PAWN_THREAT_BONUS_MG, PAWN_THREAT_MG)
+                    + minor_major_targets
+                        * tuned(MINOR_MAJOR_THREAT_BONUS_MG, MINOR_MAJOR_THREAT_MG)
+                    + hanging_targets * tuned(HANGING_THREAT_BONUS_MG, HANGING_THREAT_MG),
+                pawn_targets * tuned(PAWN_THREAT_BONUS_EG, PAWN_THREAT_EG)
+                    + minor_major_targets
+                        * tuned(MINOR_MAJOR_THREAT_BONUS_EG, MINOR_MAJOR_THREAT_EG)
+                    + hanging_targets * tuned(HANGING_THREAT_BONUS_EG, HANGING_THREAT_EG),
+            );
     }
 
-    mg += pawn_structure.mg;
-    eg += pawn_structure.eg;
+    score += pawn_structure.score;
 
     for color in [Color::White, Color::Black] {
         let sign = if color == Color::White { 1 } else { -1 };
@@ -340,14 +389,20 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
         for pawn in pawn_structure.passers[color as usize] {
             let own_king_dist = chebyshev_distance(board.king(color), pawn);
             let enemy_king_dist = chebyshev_distance(board.king(!color), pawn);
-            eg += sign
-                * (enemy_king_dist * tuned(PASSER_ENEMY_KING_DIST_WEIGHT_EG, PASSER_ENEMY_KING)
-                    - own_king_dist * tuned(PASSER_OWN_KING_DIST_WEIGHT_EG, PASSER_OWN_KING));
+            score += sign
+                * pack(
+                    0,
+                    enemy_king_dist * tuned(PASSER_ENEMY_KING_DIST_WEIGHT_EG, PASSER_ENEMY_KING)
+                        - own_king_dist * tuned(PASSER_OWN_KING_DIST_WEIGHT_EG, PASSER_OWN_KING),
+                );
         }
 
         if board.colored_pieces(color, Piece::Bishop).len() >= 2 {
-            mg += sign * tuned(BISHOP_PAIR_BONUS_MG, BISHOP_PAIR_MG);
-            eg += sign * tuned(BISHOP_PAIR_BONUS_EG, BISHOP_PAIR_EG);
+            score += sign
+                * pack(
+                    tuned(BISHOP_PAIR_BONUS_MG, BISHOP_PAIR_MG),
+                    tuned(BISHOP_PAIR_BONUS_EG, BISHOP_PAIR_EG),
+                );
         }
         for rook in board.colored_pieces(color, Piece::Rook) {
             let file = rook.file() as usize;
@@ -355,17 +410,17 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
                 let enemy_on_file = enemy_pawns
                     .into_iter()
                     .any(|pawn| pawn.file() as usize == file);
-                mg += sign
+                score += sign
                     * if enemy_on_file {
-                        tuned(ROOK_SEMI_OPEN_FILE_BONUS_MG, ROOK_SEMI_OPEN_MG)
+                        pack(
+                            tuned(ROOK_SEMI_OPEN_FILE_BONUS_MG, ROOK_SEMI_OPEN_MG),
+                            tuned(ROOK_SEMI_OPEN_FILE_BONUS_EG, ROOK_SEMI_OPEN_EG),
+                        )
                     } else {
-                        tuned(ROOK_OPEN_FILE_BONUS_MG, ROOK_OPEN_MG)
-                    };
-                eg += sign
-                    * if enemy_on_file {
-                        tuned(ROOK_SEMI_OPEN_FILE_BONUS_EG, ROOK_SEMI_OPEN_EG)
-                    } else {
-                        tuned(ROOK_OPEN_FILE_BONUS_EG, ROOK_OPEN_EG)
+                        pack(
+                            tuned(ROOK_OPEN_FILE_BONUS_MG, ROOK_OPEN_MG),
+                            tuned(ROOK_OPEN_FILE_BONUS_EG, ROOK_OPEN_EG),
+                        )
                     };
             }
         }
@@ -376,10 +431,14 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
     // almost identical material scores until mate happens to enter the search
     // horizon. Bishop-and-knight is special: its king must be driven to a
     // corner controlled by the bishop, not merely to any edge.
-    eg += bare_king_mating_bonus(board, Color::White);
-    eg -= bare_king_mating_bonus(board, Color::Black);
+    score += pack(
+        0,
+        bare_king_mating_bonus(board, Color::White) - bare_king_mating_bonus(board, Color::Black),
+    );
 
     phase = phase.min(24);
+    let mg = mg_value(score);
+    let eg = eg_value(score);
     let white_score = (mg * phase + eg * (24 - phase)) / 24;
     if board.side_to_move() == Color::White {
         white_score + tuned(TEMPO_BONUS, TEMPO)
@@ -541,6 +600,20 @@ pub(crate) fn insufficient_material(board: &Board) -> bool {
 #[cfg(test)]
 mod evaluation_tests {
     use super::*;
+
+    #[test]
+    fn packed_scores_round_trip_and_add_without_cross_half_carry() {
+        for (mg, eg) in [(-300, 700), (300, -700), (-1, -1), (0, 0)] {
+            let score = pack(mg, eg);
+            assert_eq!((mg_value(score), eg_value(score)), (mg, eg));
+        }
+        let sum = pack(-125, 250) + pack(75, -50);
+        assert_eq!((mg_value(sum), eg_value(sum)), (-50, 200));
+        assert_eq!(
+            std::mem::size_of_val(&PACKED_PST),
+            std::mem::size_of_val(&MG_PST) + std::mem::size_of_val(&EG_PST)
+        );
+    }
 
     #[test]
     fn safe_mobility_excludes_own_and_enemy_pawn_controlled_squares() {
