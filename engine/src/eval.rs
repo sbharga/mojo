@@ -110,6 +110,7 @@ const MINOR_MAJOR_THREAT_BONUS_MG: i32 = 16;
 const MINOR_MAJOR_THREAT_BONUS_EG: i32 = 12;
 const HANGING_THREAT_BONUS_MG: i32 = 20;
 const HANGING_THREAT_BONUS_EG: i32 = 24;
+const KPK_WIN_SCORE: i32 = 10_000;
 
 // Compact PeSTO-style piece-square model. Tables are indexed a8..h1.
 #[rustfmt::skip]
@@ -440,11 +441,28 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
     let mg = mg_value(score);
     let eg = eg_value(score);
     let white_score = (mg * phase + eg * (24 - phase)) / 24;
-    let relative_score = if board.side_to_move() == Color::White {
+    let mut relative_score = if board.side_to_move() == Color::White {
         white_score + tuned(TEMPO_BONUS, TEMPO)
     } else {
         -white_score + tuned(TEMPO_BONUS, TEMPO)
     };
+    match crate::kpk::probe(board) {
+        Some(false) => return 0,
+        Some(true) => {
+            let pawn = board
+                .pieces(Piece::Pawn)
+                .into_iter()
+                .next()
+                .expect("KPK contains one pawn");
+            let pawn_to_move = board.color_on(pawn) == Some(board.side_to_move());
+            relative_score += if pawn_to_move {
+                KPK_WIN_SCORE
+            } else {
+                -KPK_WIN_SCORE
+            };
+        }
+        None => {}
+    }
     relative_score * halfmove_scale(board) / 256
 }
 
@@ -682,21 +700,30 @@ pub mod tuning {
         phase: i32,
         perspective: i32,
         rule_scale: i32,
+        offset: i32,
+        forced_draw: bool,
     }
 
     impl LinearFeatures {
         pub fn value(&self, weights: &[f64; PARAMETER_COUNT]) -> f64 {
+            if self.forced_draw {
+                return 0.0;
+            }
             let mg = dot_f64(&self.mg, weights);
             let eg = dot_f64(&self.eg, weights);
             let direct = dot_f64(&self.direct, weights);
             (self.perspective as f64 * (mg * self.phase as f64 + eg * (24 - self.phase) as f64)
                 / 24.0
-                + direct)
+                + direct
+                + f64::from(self.offset))
                 * self.rule_scale as f64
                 / 256.0
         }
 
         pub fn add_gradient(&self, gradient: &mut [f64; PARAMETER_COUNT], scale: f64) {
+            if self.forced_draw {
+                return;
+            }
             let scale = scale * self.rule_scale as f64 / 256.0;
             let mg_scale = scale * self.perspective as f64 * self.phase as f64 / 24.0;
             let eg_scale = scale * self.perspective as f64 * (24 - self.phase) as f64 / 24.0;
@@ -709,10 +736,14 @@ pub mod tuning {
 
         #[cfg(test)]
         fn integer_value(&self, weights: &[i32; PARAMETER_COUNT]) -> i32 {
+            if self.forced_draw {
+                return 0;
+            }
             let mg = dot_i32(&self.mg, weights);
             let eg = dot_i32(&self.eg, weights);
             (self.perspective * (mg * self.phase + eg * (24 - self.phase)) / 24
-                + dot_i32(&self.direct, weights))
+                + dot_i32(&self.direct, weights)
+                + self.offset)
                 * self.rule_scale
                 / 256
         }
@@ -919,6 +950,21 @@ pub mod tuning {
         }
         direct[TEMPO] = 1;
 
+        let kpk = crate::kpk::probe(board);
+        let offset = if kpk == Some(true) {
+            let pawn = board
+                .pieces(Piece::Pawn)
+                .into_iter()
+                .next()
+                .expect("KPK contains one pawn");
+            if board.color_on(pawn) == Some(board.side_to_move()) {
+                KPK_WIN_SCORE
+            } else {
+                -KPK_WIN_SCORE
+            }
+        } else {
+            0
+        };
         LinearFeatures {
             mg,
             eg,
@@ -926,6 +972,8 @@ pub mod tuning {
             phase: phase.min(24),
             perspective: color_sign(board.side_to_move()),
             rule_scale: super::halfmove_scale(board),
+            offset,
+            forced_draw: kpk == Some(false),
         }
     }
 
@@ -1127,6 +1175,8 @@ pub mod tuning {
                 "8/2p2pk1/1p1p2p1/p2P3p/P1P1P3/1P3K2/5PP1/8 b - - 0 35",
                 "7k/8/8/8/8/8/R7/6K1 w - - 0 1",
                 "7k/8/8/8/8/8/4N3/2B3K1 w - - 0 1",
+                "8/kPK5/8/8/8/8/8/8 w - - 0 1",
+                "k7/P7/1K6/8/8/8/8/8 b - - 0 1",
             ] {
                 let board = if fen == "startpos" {
                     Board::default()

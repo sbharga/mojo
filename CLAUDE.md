@@ -71,6 +71,10 @@ CI (`.github/workflows/ci.yml`) runs, in order: `cargo fmt --check`, `cargo clip
   `engine/src/search/pawn_cache.rs` keeps a 128 KiB pawn-Zobrist cache of
   structure scores and passer bitboards; king-distance and rook-file terms
   remain position-dependent and are evaluated outside the cache.
+- `engine/src/kpk.rs` generates a normalized 24 KiB king-and-pawn-versus-king
+  bitbase once when the first search core is constructed. Exact draws bypass
+  search evaluation; wins receive a decisive score plus the normal progress
+  gradient.
 - `engine/pkg/` is the **generated** `wasm-pack` output (JS glue + `.wasm`
   binary) that `web/` imports directly — it is committed and must be
   regenerated (`npm run build:engine`) after any `engine/src` change; it is
