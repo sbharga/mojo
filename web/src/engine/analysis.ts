@@ -17,9 +17,9 @@ export function formatAnalysisScore(line: Analysis["lines"][number]) {
 // The engine uses the standard negamax convention (positive means the side to
 // move is ahead), while every UI score is shown from White's perspective.
 export function toWhiteRelative(
-  result: Omit<Analysis, "root_fen">,
+  result: Omit<Analysis, "root_fen" | "repetition_fingerprint">,
   fen: string,
-): Omit<Analysis, "root_fen"> {
+): Omit<Analysis, "root_fen" | "repetition_fingerprint"> {
   if (fen.split(" ")[1] !== "b") return result;
   return {
     ...result,

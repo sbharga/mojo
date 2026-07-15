@@ -120,6 +120,10 @@ licensing, correctness, and fixed-time strength gates.
   PV is forwarded as a ponder seed for the resulting position. Rust validates
   the suffix and installs exact, decreasing-depth TT entries before the move
   worker searches, while a missed prediction is ignored.
+- Cached analysis is keyed by the root FEN plus a compact, order-independent
+  fingerprint of prior positions inside the halfmove-clock window. Identical
+  boards reached through repetition-relevant histories no longer share a
+  result; history before the last irreversible move still shares normally.
 - Stockfish Lite runs as a separate UCI worker only in Stockfish game modes;
   its GPLv3 attribution and source information are in `THIRD_PARTY_NOTICES.md`.
 

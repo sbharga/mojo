@@ -58,9 +58,9 @@ export function useEngine(onMove: (uci: string) => void) {
         // Cache every valid result we see, even from a superseded request —
         // it's still a correct, reusable result for its own (older) fen.
         if (message.type === "analysis")
-          analysisCache.set(message.analysis.root_fen, message.analysis);
+          analysisCache.set(message.analysis);
         if (message.type === "complete" && message.analysis)
-          analysisCache.set(message.analysis.root_fen, message.analysis);
+          analysisCache.set(message.analysis);
         if (
           message.type === "analysis" &&
           message.requestId === request.current
@@ -107,7 +107,11 @@ export function useEngine(onMove: (uci: string) => void) {
       // A fen already fully analyzed (history navigation, or pause/resume
       // landing back on the same position) doesn't need to be re-searched
       // from depth 1 by the other worker.
-      const cached = analysisCache.get(fen, purpose === "move" ? 1 : 3);
+      const cached = analysisCache.get(
+        fen,
+        historyFens,
+        purpose === "move" ? 1 : 3,
+      );
       if (cached) {
         setAnalysis(cached);
         if (purpose === "move" && cached.lines[0]?.moves[0])
@@ -116,7 +120,10 @@ export function useEngine(onMove: (uci: string) => void) {
       }
       const predecessorFen = historyFens.at(-1);
       const seed = purpose === "move" && predecessorFen
-        ? ponderSeed(fen, analysisCache.peek(predecessorFen, 1))
+        ? ponderSeed(
+            fen,
+            analysisCache.peek(predecessorFen, historyFens.slice(0, -1), 1),
+          )
         : null;
       setAnalysis(null);
       workers.current[purpose]?.postMessage({

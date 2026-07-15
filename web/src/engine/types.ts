@@ -14,6 +14,7 @@ export interface AnalysisLine {
 
 export interface Analysis {
   root_fen: string;
+  repetition_fingerprint: string;
   depth: number;
   nodes: number;
   root_node_fraction: number;

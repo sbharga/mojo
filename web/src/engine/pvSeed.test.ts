@@ -6,6 +6,7 @@ import type { Analysis } from "./types";
 function analysis(overrides: Partial<Analysis> = {}): Analysis {
   return {
     root_fen: new Chess().fen(),
+    repetition_fingerprint: "0000000000000000",
     depth: 8,
     nodes: 1_000,
     root_node_fraction: 0.5,

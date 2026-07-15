@@ -12,6 +12,7 @@ import type {
 import { toWhiteRelative } from "./analysis";
 import { isCancelled } from "./stopSignal";
 import { supportsWasmSimd } from "./wasmFeatures";
+import { repetitionFingerprint } from "./repetitionFingerprint";
 
 let initialized = false;
 let cancelledBefore = 0;
@@ -52,6 +53,7 @@ async function analyze(request: AnalyzeRequest) {
       );
     }
     const started = performance.now();
+    const historyFingerprint = repetitionFingerprint(request.fen, request.historyFens);
     let depth = 1;
     let latest: Analysis | null = null;
     const maxDepth = 32;
@@ -69,11 +71,15 @@ async function analyze(request: AnalyzeRequest) {
       const result = toWhiteRelative(
         engine.analyze_depth(depth, multiPv, budget) as Omit<
           Analysis,
-          "root_fen"
+          "root_fen" | "repetition_fingerprint"
         >,
         request.fen,
       );
-      const rootedResult: Analysis = { ...result, root_fen: request.fen };
+      const rootedResult: Analysis = {
+        ...result,
+        root_fen: request.fen,
+        repetition_fingerprint: historyFingerprint,
+      };
       if (
         request.requestId <= cancelledBefore
         || isCancelled(stopFlag, request.requestId)
@@ -116,6 +122,7 @@ async function analyze(request: AnalyzeRequest) {
       if (move) {
         latest = {
           root_fen: request.fen,
+          repetition_fingerprint: historyFingerprint,
           depth: 0,
           nodes: 0,
           root_node_fraction: 1,
