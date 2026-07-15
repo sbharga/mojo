@@ -39,6 +39,9 @@ self-play loops consume the same Rust-provided policy as the browser worker.
 The same callers use a smoothed effective branching factor to avoid starting a
 deeper iteration predicted not to finish, with extra allowance for MultiPV and
 an override when the best move or score is unstable.
+After each completed depth, Rust also calibrates wall-clock polling from the
+measured node rate to target roughly 1.5 ms between checks, bounded to
+64–4,096 nodes; deterministic node-limited tests still check every node.
 
 `npm --prefix web run test:strength` runs a deterministic tactical regression
 suite against the generated Wasm engine. It uses fixed-depth, hand-verifiable

@@ -28,7 +28,10 @@ pub(crate) const MATE_SCORE: i32 = 30_000;
 pub(crate) const INF: i32 = 32_000;
 pub(crate) const MAX_PLY: usize = 64;
 const MAX_MOVES: usize = 218;
-const TIME_CHECK_INTERVAL: u64 = 256;
+const DEFAULT_TIME_CHECK_INTERVAL: u64 = 256;
+const MIN_TIME_CHECK_INTERVAL: u64 = 64;
+const MAX_TIME_CHECK_INTERVAL: u64 = 4096;
+const TARGET_TIME_CHECK_MS: f64 = 1.5;
 
 // --- Search tuning constants (values intentionally unchanged during
 // cleanup; retuning these is a strength-tuning decision that can't be
@@ -140,6 +143,7 @@ pub(crate) struct SearchResult {
     pub(crate) soft_time_fraction: f64,
     pub(crate) predicted_next_ms: f64,
     pub(crate) ebf_gate_override: bool,
+    pub(crate) clock_check_interval: u32,
     pub(crate) timed_out: bool,
     pub(crate) lines: Vec<SearchLine>,
 }
@@ -171,6 +175,9 @@ pub(crate) struct SearchCore {
     generation: u8,
     nodes: u64,
     deadline_ms: f64,
+    clock_check_interval: u64,
+    next_clock_check: u64,
+    clock_calibrated: bool,
     timed_out: bool,
     #[cfg(test)]
     node_limit: Option<u64>,
@@ -216,6 +223,9 @@ impl SearchCore {
             generation: 0,
             nodes: 0,
             deadline_ms: f64::INFINITY,
+            clock_check_interval: DEFAULT_TIME_CHECK_INTERVAL,
+            next_clock_check: DEFAULT_TIME_CHECK_INTERVAL,
+            clock_calibrated: false,
             timed_out: false,
             #[cfg(test)]
             node_limit: None,
@@ -274,6 +284,7 @@ impl SearchCore {
     ) -> SearchResult {
         let iteration_started = crate::now_ms();
         self.nodes = 0;
+        self.next_clock_check = self.clock_check_interval;
         self.timed_out = false;
         #[cfg(test)]
         {
@@ -293,6 +304,7 @@ impl SearchCore {
                 soft_time_fraction: 0.5,
                 predicted_next_ms: 0.0,
                 ebf_gate_override: false,
+                clock_check_interval: self.clock_check_interval as u32,
                 timed_out: false,
                 lines: Vec::new(),
             };
@@ -354,8 +366,11 @@ impl SearchCore {
             root_node_fraction,
         );
         let ebf_gate_override = soft_time_fraction >= 0.8;
+        let iteration_elapsed_ms = crate::now_ms() - iteration_started;
         let predicted_next_ms = if !self.timed_out && !lines.is_empty() {
-            self.predict_next_iteration(crate::now_ms() - iteration_started)
+            let prediction = self.predict_next_iteration(iteration_elapsed_ms);
+            self.calibrate_clock_checks(iteration_elapsed_ms);
+            prediction
         } else {
             0.0
         };
@@ -365,6 +380,7 @@ impl SearchCore {
             soft_time_fraction,
             predicted_next_ms,
             ebf_gate_override,
+            clock_check_interval: self.clock_check_interval as u32,
             timed_out: self.timed_out,
             lines,
         }
@@ -1129,8 +1145,11 @@ impl SearchCore {
         if self.node_limit.is_some_and(|limit| self.nodes >= limit) {
             self.timed_out = true;
         }
-        if self.nodes.is_multiple_of(TIME_CHECK_INTERVAL) && crate::now_ms() >= self.deadline_ms {
-            self.timed_out = true;
+        if self.nodes >= self.next_clock_check {
+            self.next_clock_check = self.nodes.saturating_add(self.clock_check_interval);
+            if crate::now_ms() >= self.deadline_ms {
+                self.timed_out = true;
+            }
         }
         self.timed_out
     }
@@ -1255,6 +1274,25 @@ impl SearchCore {
             .map_or(recent_ebf, |previous| 0.6 * previous + 0.4 * recent_ebf);
         self.smoothed_ebf = Some(smoothed);
         elapsed_ms * smoothed
+    }
+
+    fn calibrate_clock_checks(&mut self, elapsed_ms: f64) {
+        if self.nodes == 0 || elapsed_ms <= 0.0 || !elapsed_ms.is_finite() {
+            return;
+        }
+        let measured = ((self.nodes as f64 / elapsed_ms) * TARGET_TIME_CHECK_MS)
+            .round()
+            .clamp(
+                MIN_TIME_CHECK_INTERVAL as f64,
+                MAX_TIME_CHECK_INTERVAL as f64,
+            ) as u64;
+        self.clock_check_interval = if self.clock_calibrated {
+            (3 * self.clock_check_interval + measured) / 4
+        } else {
+            self.clock_calibrated = true;
+            measured
+        }
+        .clamp(MIN_TIME_CHECK_INTERVAL, MAX_TIME_CHECK_INTERVAL);
     }
 
     fn store(
@@ -1844,5 +1882,27 @@ mod tests {
         // A single 10x outlier is clamped to 8x and blended 40/60 with the
         // prior 2x estimate: 0.6*2 + 0.4*8 = 4.4.
         assert!((search.predict_next_iteration(400.0) - 1_760.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn clock_check_calibration_targets_wall_time_and_stays_bounded() {
+        let mut search = SearchCore::new();
+        search.nodes = 1_000;
+        search.calibrate_clock_checks(10.0);
+        assert_eq!(search.clock_check_interval, 150);
+
+        search.nodes = 10_000;
+        search.calibrate_clock_checks(10.0);
+        assert_eq!(search.clock_check_interval, 487);
+
+        let mut slow = SearchCore::new();
+        slow.nodes = 1;
+        slow.calibrate_clock_checks(100.0);
+        assert_eq!(slow.clock_check_interval, MIN_TIME_CHECK_INTERVAL);
+
+        let mut fast = SearchCore::new();
+        fast.nodes = 1_000_000;
+        fast.calibrate_clock_checks(1.0);
+        assert_eq!(fast.clock_check_interval, MAX_TIME_CHECK_INTERVAL);
     }
 }

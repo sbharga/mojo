@@ -101,6 +101,7 @@ async function analyze(request: AnalyzeRequest) {
           soft_time_fraction: 1,
           predicted_next_ms: 0,
           ebf_gate_override: false,
+          clock_check_interval: 256,
           elapsed_ms: performance.now() - started,
           timed_out: true,
           lines: [{ score_cp: 0, moves: [move] }],
