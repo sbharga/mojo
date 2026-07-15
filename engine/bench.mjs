@@ -3,6 +3,7 @@ import { gzipSync } from 'node:zlib'
 import { Engine, initSync } from './pkg/mojo_engine.js'
 
 const wasmBytes = readFileSync(new URL('./pkg/mojo_engine_bg.wasm', import.meta.url))
+const simdWasmBytes = readFileSync(new URL('./pkg/mojo_engine_simd_bg.wasm', import.meta.url))
 const wasm = initSync({ module: wasmBytes })
 const initialMemory = wasm.memory.buffer.byteLength
 const positions = [
@@ -71,8 +72,10 @@ const peakMemory = wasm.memory.buffer.byteLength
 
 console.table(results)
 console.log({
-  wasm_raw_bytes: wasmBytes.byteLength,
-  wasm_gzip_bytes: gzipSync(wasmBytes).byteLength,
+  baseline_wasm_raw_bytes: wasmBytes.byteLength,
+  baseline_wasm_gzip_bytes: gzipSync(wasmBytes).byteLength,
+  simd_wasm_raw_bytes: simdWasmBytes.byteLength,
+  simd_wasm_gzip_bytes: gzipSync(simdWasmBytes).byteLength,
   initial_memory_bytes: initialMemory,
   peak_memory_bytes: peakMemory,
 })

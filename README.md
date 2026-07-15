@@ -47,6 +47,10 @@ measured node rate to target roughly 1.5 ms between checks, bounded to
 suite against the generated Wasm engine. It uses fixed-depth, hand-verifiable
 positions so search changes cannot silently lose basic tactical correctness.
 
+The engine build emits baseline and `simd128` Wasm artifacts. The worker uses a
+small `WebAssembly.validate` probe and loads SIMD only on supporting browsers;
+the benchmark reports raw and gzip sizes for both builds.
+
 ## Strength testing
 
 `engine/selfplay.mjs` compares two Wasm builds at a fixed iterative-search

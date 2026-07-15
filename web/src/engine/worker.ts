@@ -2,6 +2,7 @@
 
 import init, { Engine } from "../../../engine/pkg/mojo_engine.js";
 import wasmUrl from "../../../engine/pkg/mojo_engine_bg.wasm?url";
+import simdWasmUrl from "../../../engine/pkg/mojo_engine_simd_bg.wasm?url";
 import type {
   Analysis,
   AnalyzeRequest,
@@ -10,6 +11,7 @@ import type {
 } from "./types";
 import { toWhiteRelative } from "./analysis";
 import { isCancelled } from "./stopSignal";
+import { supportsWasmSimd } from "./wasmFeatures";
 
 let initialized = false;
 let cancelledBefore = 0;
@@ -20,7 +22,7 @@ let stopFlag: Int32Array | null = null;
 async function ensureEngine() {
   if (initialized) return;
   initialization ??= (async () => {
-    await init({ module_or_path: wasmUrl });
+    await init({ module_or_path: supportsWasmSimd() ? simdWasmUrl : wasmUrl });
     engine = new Engine();
     if (stopFlag) engine.set_stop_flag(stopFlag);
     initialized = true;
