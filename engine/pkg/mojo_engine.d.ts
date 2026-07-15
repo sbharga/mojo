@@ -44,36 +44,18 @@ export class Engine {
     set_stop_request(request_id: number): void;
 }
 
-/**
- * Compatibility entry point for consumers that do not retain an `Engine`.
- */
-export function analyze_step(fen: string, depth: number, multi_pv: number, time_limit_ms: number): any;
-
-export function engine_name(): string;
-
-/**
- * Picks the best immediate legal move when a bounded search cannot finish.
- *
- * # Errors
- * Returns an error if `fen` is invalid.
- */
-export function fallback_move(fen: string): string | undefined;
-
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_engine_free: (a: number, b: number) => void;
-    readonly analyze_step: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly engine_analyze_depth: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly engine_fallback_move: (a: number, b: number) => void;
-    readonly engine_name: (a: number) => void;
     readonly engine_new: () => number;
     readonly engine_seed_pv: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly engine_set_position: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly engine_set_stop_flag: (a: number, b: number) => void;
     readonly engine_set_stop_request: (a: number, b: number) => void;
-    readonly fallback_move: (a: number, b: number, c: number) => void;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_export3: (a: number) => void;

@@ -49,7 +49,10 @@ positions so search changes cannot silently lose basic tactical correctness.
 
 The engine build emits baseline and `simd128` Wasm artifacts. The worker uses a
 small `WebAssembly.validate` probe and loads SIMD only on supporting browsers;
-the benchmark reports raw and gzip sizes for both builds.
+the benchmark reports raw, gzip, and Brotli sizes for both builds. CI rejects
+either artifact above 225 KB gzip and uploads a Twiggy size profile. The
+measured `-O`/`s`/`z` tradeoff is recorded in
+[`engine/SIZE_DECISION.md`](engine/SIZE_DECISION.md).
 
 An optional threaded Lazy SMP build is deliberately gated rather than shipped
 as dead code on the current non-isolated GitHub Pages host. The measured

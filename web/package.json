@@ -16,11 +16,12 @@
     "test:strength": "node ../engine/accuracy.mjs && node ../engine/accuracy.mjs --wasm ../engine/pkg/mojo_engine_simd_bg.wasm",
     "test:cancellation": "node ../engine/validate-cancellation.mjs",
     "test:seeding": "node ../engine/validate-seeding.mjs",
+    "test:size": "node ../engine/validate-size.mjs",
     "dev": "npm run build:engine && vite",
     "build": "npm run build:engine && tsc -b && vite build",
     "lint": "eslint .",
     "test": "vitest run",
-    "check": "npm run lint && tsc -b && npm run test && npm run test:openings && npm run test:strength && npm run test:cancellation && npm run test:seeding && npm run test:selfplay"
+    "check": "npm run lint && tsc -b && npm run test && npm run test:openings && npm run test:strength && npm run test:cancellation && npm run test:seeding && npm run test:size && npm run test:selfplay"
   },
   "dependencies": {
     "chess.js": "^1.4.0",

@@ -146,20 +146,6 @@ impl Default for Engine {
     }
 }
 
-/// Compatibility entry point for consumers that do not retain an `Engine`.
-#[wasm_bindgen]
-pub fn analyze_step(
-    fen: &str,
-    depth: u8,
-    multi_pv: u8,
-    time_limit_ms: f64,
-) -> Result<JsValue, JsValue> {
-    let board = parse_board(fen)?;
-    let mut search = SearchCore::new();
-    search.set_position(&board, &[]);
-    run_analysis(&mut search, &board, depth, multi_pv, time_limit_ms)
-}
-
 fn run_analysis(
     search: &mut SearchCore,
     board: &Board,
@@ -185,21 +171,6 @@ fn run_analysis(
             .map(|line| score_to_line(board, line))
             .collect(),
     })
-}
-
-/// Picks the best immediate legal move when a bounded search cannot finish.
-///
-/// # Errors
-/// Returns an error if `fen` is invalid.
-#[wasm_bindgen]
-pub fn fallback_move(fen: &str) -> Result<Option<String>, JsValue> {
-    let board = parse_board(fen)?;
-    Ok(fallback(&board).map(|mv| uci_move(&board, mv)))
-}
-
-#[wasm_bindgen]
-pub fn engine_name() -> String {
-    "Mojo 0.2".to_owned()
 }
 
 fn parse_board(fen: &str) -> Result<Board, JsValue> {
