@@ -15,6 +15,8 @@ use cozy_chess::{Board, File, Move, Piece, Square};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
+#[cfg(feature = "spsa")]
+use search::SearchParameters;
 use search::{MATE_SCORE, MAX_PLY, SearchCore, SearchLine, fallback};
 
 #[derive(Debug, Clone, Serialize)]
@@ -131,6 +133,16 @@ impl Engine {
             parsed.push(mv);
         }
         Ok(self.search.seed_pv(board, &parsed, score, i16::from(depth)) as u32)
+    }
+
+    /// Applies a bounded parameter record in dedicated SPSA builds.
+    #[cfg(feature = "spsa")]
+    pub fn set_search_parameters(&mut self, parameters: JsValue) -> Result<(), JsValue> {
+        let parameters: SearchParameters = serde_wasm_bindgen::from_value(parameters)
+            .map_err(|error| JsValue::from_str(&format!("Invalid search parameters: {error}")))?;
+        self.search
+            .set_parameters(parameters.validate().map_err(JsValue::from_str)?);
+        Ok(())
     }
 
     /// Returns the best static one-ply fallback for the current position.

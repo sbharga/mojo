@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
 
 const requireFromWeb = createRequire(new URL('../web/package.json', import.meta.url))
@@ -22,6 +22,10 @@ const defaults = {
   openingLimit: undefined,
   openingsFile: undefined,
   trainingOutput: undefined,
+  baselineParams: undefined,
+  candidateParams: undefined,
+  jsonOutput: undefined,
+  glue: 'engine/pkg/mojo_engine.js',
   winScoreCp: 1200,
   winPlies: 6,
   drawScoreCp: 20,
@@ -39,6 +43,10 @@ Options:
   --openings <count>       Limit the number of opening pairs
   --openings-file <path>   JSON opening suite (default: bundled ECO FEN suite)
   --training-output <path> Write <white result><TAB><FEN> tuning records
+  --baseline-params <path> SPSA parameter JSON for the baseline side
+  --candidate-params <path> SPSA parameter JSON for the candidate side
+  --glue <path>             Wasm-bindgen glue (use pkg-spsa for tuning)
+  --json-output <path>      Write the machine-readable match summary
   --max-plies <count>      Hard game-length draw limit (default: 200)
   --elo0 <elo>             SPRT null hypothesis (default: 0)
   --elo1 <elo>             SPRT alternative hypothesis (default: 10)
@@ -70,14 +78,10 @@ function parseArgs(argv) {
       usage()
       process.exit(0)
     }
-    if (['--baseline', '--candidate', '--openings-file', '--training-output'].includes(argument)) {
+    if (['--baseline', '--candidate', '--openings-file', '--training-output', '--baseline-params', '--candidate-params', '--json-output', '--glue'].includes(argument)) {
       const value = argv[index + 1]
       if (!value) throw new Error(`${argument} requires a path`)
-      const property = argument === '--openings-file'
-        ? 'openingsFile'
-        : argument === '--training-output'
-          ? 'trainingOutput'
-          : argument.slice(2)
+      const property = argument.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())
       options[property] = value
       index += 1
       continue
@@ -148,8 +152,8 @@ function loadOpenings(path) {
   })
 }
 
-async function loadEngineClass(wasmPath, instance) {
-  const glueUrl = new URL('./pkg/mojo_engine.js', import.meta.url)
+async function loadEngineClass(wasmPath, instance, gluePath) {
+  const glueUrl = pathToFileURL(resolve(repositoryRoot, gluePath))
   glueUrl.searchParams.set('instance', instance)
   const engineModule = await import(glueUrl.href)
   const wasmBytes = readFileSync(resolve(repositoryRoot, wasmPath))
@@ -234,9 +238,11 @@ function candidateResult(winner, candidateColor) {
   return winner === candidateColor ? 1 : 0
 }
 
-function playGame({ Baseline, Candidate, candidateColor, maxPlies, opening, options }) {
+function playGame({ Baseline, Candidate, baselineParameters, candidateParameters, candidateColor, maxPlies, opening, options }) {
   const baseline = new Baseline()
   const candidate = new Candidate()
+  if (baselineParameters) baseline.set_search_parameters(baselineParameters)
+  if (candidateParameters) candidate.set_search_parameters(candidateParameters)
   const { game, priorFens } = createOpening(opening)
   const white = candidateColor === 'white' ? candidate : baseline
   const black = candidateColor === 'black' ? candidate : baseline
@@ -367,9 +373,15 @@ function sprt(pairScores, options) {
 async function main() {
   const options = parseArgs(process.argv.slice(2))
   const [Baseline, Candidate] = await Promise.all([
-    loadEngineClass(options.baseline, 'baseline'),
-    loadEngineClass(options.candidate, 'candidate'),
+    loadEngineClass(options.baseline, 'baseline', options.glue),
+    loadEngineClass(options.candidate, 'candidate', options.glue),
   ])
+  const baselineParameters = options.baselineParams
+    ? JSON.parse(readFileSync(resolve(repositoryRoot, options.baselineParams), 'utf8'))
+    : null
+  const candidateParameters = options.candidateParams
+    ? JSON.parse(readFileSync(resolve(repositoryRoot, options.candidateParams), 'utf8'))
+    : null
   const games = []
   const pairScores = []
   const openingSuite = loadOpenings(options.openingsFile)
@@ -379,6 +391,8 @@ async function main() {
     const first = playGame({
       Baseline,
       Candidate,
+      baselineParameters,
+      candidateParameters,
       candidateColor: 'white',
       maxPlies: options.maxPlies,
       opening,
@@ -387,6 +401,8 @@ async function main() {
     const second = playGame({
       Baseline,
       Candidate,
+      baselineParameters,
+      candidateParameters,
       candidateColor: 'black',
       maxPlies: options.maxPlies,
       opening,
@@ -413,7 +429,7 @@ async function main() {
   const draws = games.filter((game) => game.candidateScore === 0.5).length
   const losses = games.length - wins - draws
   const report = sprt(pairScores, options)
-  console.log({
+  const summary = {
     baseline: options.baseline,
     candidate: options.candidate,
     search_limit: options.moveTimeMs === undefined
@@ -428,7 +444,11 @@ async function main() {
     llr: report.llr.toFixed(4),
     boundaries: [report.lower.toFixed(4), report.upper.toFixed(4)],
     decision: report.decision,
-  })
+  }
+  console.log(summary)
+  if (options.jsonOutput) {
+    writeFileSync(resolve(repositoryRoot, options.jsonOutput), `${JSON.stringify(summary, null, 2)}\n`)
+  }
 }
 
 main().catch((error) => {
