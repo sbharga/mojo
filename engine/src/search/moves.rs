@@ -3,7 +3,7 @@
 //! hash keys used to detect draws and to key the transposition table.
 
 use arrayvec::ArrayVec;
-use cozy_chess::{Board, Move, Piece, Rank, Square, get_pawn_attacks};
+use cozy_chess::{BitBoard, Board, Move, Piece, Rank, Square, get_pawn_attacks};
 
 use crate::eval::{evaluate, insufficient_material, piece_value};
 
@@ -16,6 +16,46 @@ pub(crate) fn legal_moves(board: &Board) -> MoveList {
         false
     });
     moves
+}
+
+pub(crate) fn tactical_moves(board: &Board) -> MoveList {
+    let mut moves = moves_to_targets(board, capture_targets(board));
+    let promotion_rank = Rank::Eighth.relative_to(board.side_to_move()).bitboard();
+    let pawns = board.colored_pieces(board.side_to_move(), Piece::Pawn);
+    board.generate_moves_for(pawns, |mut piece_moves| {
+        piece_moves.to &= promotion_rank & !board.colors(!board.side_to_move());
+        moves.extend(piece_moves);
+        false
+    });
+    moves
+}
+
+pub(crate) fn quiet_moves(board: &Board) -> MoveList {
+    let mut moves = MoveList::new();
+    let targets = !capture_targets(board);
+    board.generate_moves(|mut piece_moves| {
+        piece_moves.to &= targets;
+        moves.extend(piece_moves.into_iter().filter(|mv| mv.promotion.is_none()));
+        false
+    });
+    moves
+}
+
+fn moves_to_targets(board: &Board, targets: BitBoard) -> MoveList {
+    let mut moves = MoveList::new();
+    board.generate_moves(|mut piece_moves| {
+        piece_moves.to &= targets;
+        moves.extend(piece_moves);
+        false
+    });
+    moves
+}
+
+fn capture_targets(board: &Board) -> BitBoard {
+    let en_passant = board.en_passant().map_or(BitBoard::EMPTY, |file| {
+        Square::new(file, Rank::Third.relative_to(!board.side_to_move())).bitboard()
+    });
+    board.colors(!board.side_to_move()) | en_passant
 }
 
 pub(crate) fn played(board: &Board, mv: Move) -> Board {
@@ -48,21 +88,17 @@ pub(crate) fn fallback(board: &Board) -> Option<Move> {
 }
 
 pub(crate) fn is_capture(board: &Board, mv: Move) -> bool {
-    board.piece_on(mv.to).is_some()
+    board.colors(!board.side_to_move()).has(mv.to)
         || (board.piece_on(mv.from) == Some(Piece::Pawn) && mv.from.file() != mv.to.file())
 }
 
 pub(crate) fn captured_value(board: &Board, mv: Move) -> i32 {
-    board.piece_on(mv.to).map_or_else(
-        || {
-            if is_capture(board, mv) {
-                piece_value(Piece::Pawn)
-            } else {
-                0
-            }
-        },
-        piece_value,
-    )
+    if !is_capture(board, mv) {
+        return 0;
+    }
+    board
+        .piece_on(mv.to)
+        .map_or_else(|| piece_value(Piece::Pawn), piece_value)
 }
 
 pub(crate) fn repetition_key(board: &Board) -> u64 {
@@ -143,5 +179,38 @@ mod tests {
 
         assert!(legal_moves(&child).is_empty());
         assert!(!child.checkers().is_empty());
+    }
+
+    #[test]
+    fn staged_generation_partitions_every_legal_move() {
+        for fen in [
+            Board::default().to_string(),
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1".to_owned(),
+            "4k3/6P1/8/3pP3/8/8/8/4K3 w - d6 0 1".to_owned(),
+        ] {
+            let board = fen.parse::<Board>().unwrap();
+            let mut all: Vec<_> = legal_moves(&board).into_iter().map(encode_move).collect();
+            let mut staged: Vec<_> = tactical_moves(&board)
+                .into_iter()
+                .chain(quiet_moves(&board))
+                .map(encode_move)
+                .collect();
+            all.sort_unstable();
+            staged.sort_unstable();
+            assert_eq!(staged, all, "{fen}");
+        }
+    }
+
+    #[test]
+    fn castling_is_a_quiet_move_not_a_rook_capture() {
+        let board = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1"
+            .parse::<Board>()
+            .unwrap();
+        for text in ["e1a1", "e1h1"] {
+            let mv = text.parse::<Move>().unwrap();
+            assert!(board.is_legal(mv));
+            assert!(!is_capture(&board, mv));
+            assert_eq!(captured_value(&board, mv), 0);
+        }
     }
 }

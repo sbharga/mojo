@@ -13,9 +13,12 @@ use cozy_chess::{Board, Color, Move, Piece};
 
 use crate::eval::{evaluate, insufficient_material};
 
-pub(crate) use moves::{fallback, legal_moves, played};
+#[cfg(test)]
+pub(crate) use moves::legal_moves;
+pub(crate) use moves::{fallback, played};
 
 use moves::{captured_value, decode_move, encode_move, is_capture, repetition_key, rule_key};
+use ordering::{MovePicker, QuiescencePicker};
 use see::static_exchange;
 use tt::{Bound, TT_BUCKETS, TT_ENTRIES, TTBucket, TTEntry, score_from_tt, score_to_tt};
 
@@ -230,20 +233,16 @@ impl SearchCore {
     ) -> Option<SearchLine> {
         let key = rule_key(board);
         let original_alpha = alpha;
-        let mut moves = legal_moves(board);
-        moves.retain(|mv| !excluded.contains(mv));
-        if moves.is_empty() {
-            return None;
-        }
         let tt_best = self
             .probe(key)
             .and_then(|entry| self.valid_tt_move(board, entry));
-        self.order_moves(board, &mut moves, tt_best, None, 0);
+        let mut picker = MovePicker::new(board, tt_best, self.killers[0], None, excluded);
         self.pv_len[0] = 0;
         let mut best_score = -INF;
         let mut best_move = None;
+        let mut index = 0;
 
-        for (index, mv) in moves.into_iter().enumerate() {
+        while let Some(mv) = picker.next(self) {
             if self.expired() {
                 break;
             }
@@ -283,6 +282,7 @@ impl SearchCore {
             if alpha >= beta {
                 break;
             }
+            index += 1;
         }
 
         best_move.map(|best_move| {
@@ -446,23 +446,24 @@ impl SearchCore {
             }
         }
 
-        let mut moves = legal_moves(board);
-        if moves.is_empty() {
-            return terminal_score(board, ply);
-        }
         let countermove =
             prev_move.and_then(|p| decode_move(self.countermove[p.from as usize][p.to as usize]));
-        self.order_moves(board, &mut moves, tt_best, countermove, ply);
+        let mut picker = MovePicker::new(board, tt_best, self.killers[ply], countermove, &[]);
         let mut best_score = -INF;
         let mut best_move = None;
+        let mut index = 0;
+        let mut legal_moves_seen = 0;
 
-        for (index, mv) in moves.into_iter().enumerate() {
+        while let Some(mv) = picker.next(self) {
+            legal_moves_seen += 1;
+            let move_index = index;
+            index += 1;
             let capture = is_capture(board, mv);
             let child = played(board, mv);
             let gives_check = !child.checkers().is_empty();
             let quiet = !capture && mv.promotion.is_none();
 
-            if !pv_node && !in_check && index > 0 && !gives_check {
+            if !pv_node && !in_check && move_index > 0 && !gives_check {
                 if capture
                     && depth <= SEE_PRUNE_MAX_DEPTH
                     && static_exchange(board, mv) < -SEE_PRUNE_MARGIN_PER_PLY * i32::from(depth)
@@ -471,7 +472,7 @@ impl SearchCore {
                 }
                 if quiet && depth <= LMP_MAX_DEPTH {
                     let depth = depth as usize;
-                    if index >= LMP_BASE_MOVE_COUNT + depth * depth {
+                    if move_index >= LMP_BASE_MOVE_COUNT + depth * depth {
                         continue;
                     }
                 }
@@ -484,10 +485,9 @@ impl SearchCore {
                     continue;
                 }
             }
-
             self.path.push(repetition_key(&child));
             let mut score;
-            if index == 0 {
+            if move_index == 0 {
                 score = -self.negamax(
                     &child,
                     depth - 1,
@@ -500,7 +500,7 @@ impl SearchCore {
                     Some(mv),
                 );
             } else {
-                let reduction = lmr_reduction(depth, index, capture, in_check, gives_check);
+                let reduction = lmr_reduction(depth, move_index, capture, in_check, gives_check);
                 score = -self.negamax(
                     &child,
                     depth - 1 - reduction,
@@ -557,6 +557,10 @@ impl SearchCore {
             }
         }
 
+        if legal_moves_seen == 0 {
+            return terminal_score(board, ply);
+        }
+
         let bound = if best_score <= original_alpha {
             Bound::Upper
         } else if best_score >= beta {
@@ -606,8 +610,7 @@ impl SearchCore {
         }
 
         let in_check = !board.checkers().is_empty();
-        let all_moves = legal_moves(board);
-        if all_moves.is_empty() {
+        if !board.generate_moves(|_| true) {
             return terminal_score(board, ply);
         }
         let stand_pat = entry
@@ -628,16 +631,9 @@ impl SearchCore {
             alpha = alpha.max(stand_pat);
         }
 
-        let mut tactical = MoveList::new();
-        tactical.extend(
-            all_moves
-                .into_iter()
-                .filter(|mv| in_check || is_capture(board, *mv) || mv.promotion.is_some()),
-        );
-        let see_values = self.order_quiescence_moves(board, &mut tactical, ply);
-
+        let mut picker = QuiescencePicker::new(board, in_check, self, ply);
         let mut best_move = None;
-        for (mv, see) in tactical.into_iter().zip(see_values) {
+        while let Some((mv, see)) = picker.next() {
             let capture = is_capture(board, mv);
             let child = played(board, mv);
             let gives_check = !child.checkers().is_empty();

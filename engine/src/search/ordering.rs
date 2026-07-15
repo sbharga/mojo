@@ -1,108 +1,206 @@
-//! Move ordering: TT/capture/killer/countermove/history scoring, plus the
-//! quiet-move cutoff bookkeeping (killers, history gravity, countermove
-//! table) that feeds it back.
-
-use std::cmp::Reverse;
+//! Staged move ordering with incremental selection, plus the quiet-move
+//! cutoff bookkeeping that feeds killers, history, and countermoves.
 
 use arrayvec::ArrayVec;
 use cozy_chess::{Board, Move};
 
 use crate::eval::piece_value;
 
-use super::moves::{captured_value, encode_move, is_capture};
+use super::moves::{
+    captured_value, encode_move, is_capture, legal_moves, quiet_moves, tactical_moves,
+};
 use super::see::static_exchange;
-use super::{MAX_MOVES, MAX_PLY, MoveList, SearchCore};
+use super::{MAX_MOVES, MAX_PLY, SearchCore};
 
-impl SearchCore {
-    pub(crate) fn order_moves(
-        &self,
-        board: &Board,
-        moves: &mut [Move],
-        tt_best: Option<Move>,
+type ScoredMoves = ArrayVec<(i32, Move), MAX_MOVES>;
+type ScoredTacticalMoves = ArrayVec<(i32, i32, Move), MAX_MOVES>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    Tt,
+    Tactical,
+    Special,
+    Quiet,
+    Done,
+}
+
+pub(crate) struct MovePicker<'a> {
+    board: &'a Board,
+    tt_move: Option<Move>,
+    excluded: &'a [Move],
+    special: [Option<Move>; 3],
+    special_index: usize,
+    stage: Stage,
+    scored: ScoredMoves,
+}
+
+impl<'a> MovePicker<'a> {
+    pub(crate) fn new(
+        board: &'a Board,
+        tt_move: Option<Move>,
+        killers: [Option<Move>; 2],
         countermove: Option<Move>,
-        ply: usize,
-    ) {
-        // `sort_unstable_by_key` may evaluate its key function more than once
-        // per element. SEE is much more expensive than comparing an integer,
-        // so cache every move's ordering score before sorting.
-        let mut scored: ArrayVec<(i32, Move), MAX_MOVES> = moves
-            .iter()
-            .map(|&mv| {
-                (
-                    self.move_order_score(board, mv, tt_best, countermove, ply),
-                    mv,
-                )
-            })
-            .collect();
-        scored.sort_unstable_by_key(|&(score, _)| Reverse(score));
-        for (slot, (_, mv)) in moves.iter_mut().zip(scored) {
-            *slot = mv;
+        excluded: &'a [Move],
+    ) -> Self {
+        Self {
+            board,
+            tt_move,
+            excluded,
+            special: [killers[0], killers[1], countermove],
+            special_index: 0,
+            stage: Stage::Tt,
+            scored: ArrayVec::new(),
         }
     }
 
-    fn move_order_score(
-        &self,
-        board: &Board,
-        mv: Move,
-        tt_best: Option<Move>,
-        countermove: Option<Move>,
-        ply: usize,
-    ) -> i32 {
-        if Some(mv) == tt_best {
-            10_000_000
-        } else if is_capture(board, mv) {
-            1_000_000 + static_exchange(board, mv) * 32 + captured_value(board, mv)
-        } else if mv.promotion.is_some() {
-            950_000 + mv.promotion.map_or(0, piece_value)
-        } else if ply < MAX_PLY && self.killers[ply].contains(&Some(mv)) {
-            900_000
-        } else if Some(mv) == countermove {
-            890_000
+    pub(crate) fn next(&mut self, search: &SearchCore) -> Option<Move> {
+        loop {
+            match self.stage {
+                Stage::Tt => {
+                    self.stage = Stage::Tactical;
+                    if let Some(mv) = self.tt_move
+                        && !self.excluded.contains(&mv)
+                    {
+                        return Some(mv);
+                    }
+                }
+                Stage::Tactical => {
+                    if self.scored.is_empty() {
+                        self.scored.extend(
+                            tactical_moves(self.board)
+                                .into_iter()
+                                .filter(|mv| Some(*mv) != self.tt_move)
+                                .filter(|mv| !self.excluded.contains(mv))
+                                .map(|mv| (tactical_score(self.board, mv), mv)),
+                        );
+                    }
+                    if let Some(mv) = select_best(&mut self.scored) {
+                        if self.scored.is_empty() {
+                            self.stage = Stage::Special;
+                        }
+                        return Some(mv);
+                    }
+                    self.stage = Stage::Special;
+                }
+                Stage::Special => {
+                    while let Some(candidate) = self.special.get(self.special_index).copied() {
+                        self.special_index += 1;
+                        if let Some(mv) = candidate
+                            && Some(mv) != self.tt_move
+                            && !self.special[..self.special_index - 1].contains(&Some(mv))
+                            && !self.excluded.contains(&mv)
+                            && !is_capture(self.board, mv)
+                            && mv.promotion.is_none()
+                            && self.board.is_legal(mv)
+                        {
+                            return Some(mv);
+                        }
+                    }
+                    self.stage = Stage::Quiet;
+                }
+                Stage::Quiet => {
+                    if self.scored.is_empty() {
+                        self.scored.extend(
+                            quiet_moves(self.board)
+                                .into_iter()
+                                .filter(|mv| Some(*mv) != self.tt_move)
+                                .filter(|mv| !self.special.contains(&Some(*mv)))
+                                .filter(|mv| !self.excluded.contains(mv))
+                                .map(|mv| (search.history[mv.from as usize][mv.to as usize], mv)),
+                        );
+                    }
+                    if let Some(mv) = select_best(&mut self.scored) {
+                        if self.scored.is_empty() {
+                            self.stage = Stage::Done;
+                        }
+                        return Some(mv);
+                    }
+                    self.stage = Stage::Done;
+                }
+                Stage::Done => return None,
+            }
+        }
+    }
+}
+
+pub(crate) struct QuiescencePicker {
+    scored: ScoredTacticalMoves,
+}
+
+impl QuiescencePicker {
+    pub(crate) fn new(board: &Board, in_check: bool, search: &SearchCore, ply: usize) -> Self {
+        let moves = if in_check {
+            legal_moves(board)
         } else {
-            self.history[mv.from as usize][mv.to as usize]
-        }
-    }
-
-    /// Like `order_moves`, but for the tactical-only move list used in
-    /// `quiescence`: it also returns each move's SEE value (meaningful only
-    /// for captures) so the caller doesn't need to recompute
-    /// `static_exchange` a second time for its own pruning decisions.
-    pub(crate) fn order_quiescence_moves(
-        &self,
-        board: &Board,
-        moves: &mut MoveList,
-        ply: usize,
-    ) -> ArrayVec<i32, MAX_MOVES> {
-        let mut scored: ArrayVec<(i32, i32, Move), MAX_MOVES> = moves
-            .iter()
-            .map(|&mv| {
+            tactical_moves(board)
+        };
+        let scored = moves
+            .into_iter()
+            .map(|mv| {
                 let see = if is_capture(board, mv) {
                     static_exchange(board, mv)
                 } else {
                     0
                 };
-                let sort_score = if is_capture(board, mv) {
-                    1_000_000 + see * 32 + captured_value(board, mv)
-                } else if mv.promotion.is_some() {
-                    950_000 + mv.promotion.map_or(0, piece_value)
-                } else if ply < MAX_PLY && self.killers[ply].contains(&Some(mv)) {
-                    900_000
+                let score = if in_check && !is_capture(board, mv) && mv.promotion.is_none() {
+                    if ply < MAX_PLY && search.killers[ply].contains(&Some(mv)) {
+                        900_000
+                    } else {
+                        search.history[mv.from as usize][mv.to as usize]
+                    }
                 } else {
-                    self.history[mv.from as usize][mv.to as usize]
+                    tactical_score_with_see(board, mv, see)
                 };
-                (sort_score, see, mv)
+                (score, see, mv)
             })
             .collect();
-        scored.sort_unstable_by_key(|&(score, ..)| Reverse(score));
-        moves.clear();
-        let mut see_values = ArrayVec::new();
-        for (_, see, mv) in scored {
-            moves.push(mv);
-            see_values.push(see);
-        }
-        see_values
+        Self { scored }
     }
 
+    pub(crate) fn next(&mut self) -> Option<(Move, i32)> {
+        let index = best_index(&self.scored, |(score, ..)| *score)?;
+        let (_, see, mv) = self.scored.swap_remove(index);
+        Some((mv, see))
+    }
+}
+
+fn select_best(scored: &mut ScoredMoves) -> Option<Move> {
+    let index = best_index(scored, |(score, _)| *score)?;
+    Some(scored.swap_remove(index).1)
+}
+
+fn best_index<T>(items: &[T], score: impl Fn(&T) -> i32) -> Option<usize> {
+    let mut best = 0;
+    let first = items.first()?;
+    let mut best_score = score(first);
+    for (index, item) in items.iter().enumerate().skip(1) {
+        let candidate = score(item);
+        if candidate > best_score {
+            best = index;
+            best_score = candidate;
+        }
+    }
+    Some(best)
+}
+
+fn tactical_score(board: &Board, mv: Move) -> i32 {
+    let see = if is_capture(board, mv) {
+        static_exchange(board, mv)
+    } else {
+        0
+    };
+    tactical_score_with_see(board, mv, see)
+}
+
+fn tactical_score_with_see(board: &Board, mv: Move, see: i32) -> i32 {
+    if is_capture(board, mv) {
+        1_000_000 + see * 32 + captured_value(board, mv)
+    } else {
+        950_000 + mv.promotion.map_or(0, piece_value)
+    }
+}
+
+impl SearchCore {
     pub(crate) fn record_quiet_cutoff(
         &mut self,
         mv: Move,
@@ -129,7 +227,8 @@ impl SearchCore {
 mod tests {
     use cozy_chess::Board;
 
-    use super::SearchCore;
+    use super::{MovePicker, SearchCore};
+    use crate::search::moves::{encode_move, legal_moves};
 
     #[test]
     fn countermove_table_populates_after_a_quiet_cutoff() {
@@ -138,5 +237,37 @@ mod tests {
         search.set_position(&board, &[]);
         search.analyze_depth(&board, 4, 1, 10_000.0);
         assert!(search.countermove.iter().flatten().any(|&entry| entry != 0));
+    }
+
+    #[test]
+    fn tt_move_is_returned_before_generating_other_stages() {
+        let board = Board::default();
+        let tt_move = "e2e4".parse().unwrap();
+        let search = SearchCore::new();
+        let mut picker = MovePicker::new(&board, Some(tt_move), [None; 2], None, &[]);
+
+        assert_eq!(picker.next(&search), Some(tt_move));
+        assert!(picker.scored.is_empty());
+        assert_eq!(picker.stage, super::Stage::Tactical);
+    }
+
+    #[test]
+    fn move_picker_returns_every_legal_move_once() {
+        let board = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1"
+            .parse::<Board>()
+            .unwrap();
+        let search = SearchCore::new();
+        let tt_move = "e2a6".parse().unwrap();
+        let killers = [Some("e1h1".parse().unwrap()), Some("e1a1".parse().unwrap())];
+        let mut picker = MovePicker::new(&board, Some(tt_move), killers, None, &[]);
+        let mut picked = Vec::new();
+        while let Some(mv) = picker.next(&search) {
+            picked.push(encode_move(mv));
+        }
+        let mut legal: Vec<_> = legal_moves(&board).into_iter().map(encode_move).collect();
+        picked.sort_unstable();
+        legal.sort_unstable();
+
+        assert_eq!(picked, legal);
     }
 }
