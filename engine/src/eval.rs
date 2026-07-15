@@ -1,6 +1,6 @@
 use cozy_chess::{
-    Board, Color, File, Piece, Rank, Square, get_bishop_moves, get_king_moves, get_knight_moves,
-    get_rook_moves,
+    BitBoard, Board, Color, File, Piece, Rank, Square, get_bishop_moves, get_king_moves,
+    get_knight_moves, get_rook_moves,
 };
 
 use crate::eval_tuned::DELTAS;
@@ -116,6 +116,85 @@ pub(crate) fn piece_value(piece: Piece) -> i32 {
 }
 
 pub(crate) fn evaluate(board: &Board) -> i32 {
+    evaluate_with_pawns(board, pawn_structure(board))
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PawnStructure {
+    mg: i32,
+    eg: i32,
+    passers: [BitBoard; 2],
+}
+
+pub(crate) fn pawn_structure_key(board: &Board) -> u64 {
+    let mut key = 0_u64;
+    for color in [Color::White, Color::Black] {
+        for square in board.colored_pieces(color, Piece::Pawn) {
+            key ^= splitmix64(square as u64 + 64 * color as u64 + 1);
+        }
+    }
+    key
+}
+
+const fn splitmix64(mut value: u64) -> u64 {
+    value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+pub(crate) fn pawn_structure(board: &Board) -> PawnStructure {
+    let mut structure = PawnStructure::default();
+    for color in [Color::White, Color::Black] {
+        let sign = if color == Color::White { 1 } else { -1 };
+        let pawns = board.colored_pieces(color, Piece::Pawn);
+        let enemy_pawns = board.colored_pieces(!color, Piece::Pawn);
+        let mut file_counts = [0_i32; 8];
+        for pawn in pawns {
+            file_counts[pawn.file() as usize] += 1;
+        }
+        for count in file_counts {
+            if count > 1 {
+                structure.mg -= sign * (count - 1) * tuned(DOUBLED_PAWN_PENALTY_MG, DOUBLED_MG);
+                structure.eg -= sign * (count - 1) * tuned(DOUBLED_PAWN_PENALTY_EG, DOUBLED_EG);
+            }
+        }
+        for pawn in pawns {
+            let file = pawn.file() as i32;
+            let rank = pawn.rank() as i32;
+            let isolated = (file == 0 || file_counts[(file - 1) as usize] == 0)
+                && (file == 7 || file_counts[(file + 1) as usize] == 0);
+            if isolated {
+                structure.mg -= sign * tuned(ISOLATED_PAWN_PENALTY_MG, ISOLATED_MG);
+                structure.eg -= sign * tuned(ISOLATED_PAWN_PENALTY_EG, ISOLATED_EG);
+            }
+            let passed = enemy_pawns.into_iter().all(|enemy| {
+                let close_file = ((enemy.file() as i32) - file).abs() <= 1;
+                let ahead = if color == Color::White {
+                    (enemy.rank() as i32) > rank
+                } else {
+                    (enemy.rank() as i32) < rank
+                };
+                !(close_file && ahead)
+            });
+            if passed {
+                structure.passers[color as usize] |= pawn.bitboard();
+                let relative_rank = if color == Color::White {
+                    rank
+                } else {
+                    7 - rank
+                } as usize;
+                structure.mg +=
+                    sign * tuned(MG_PASSER[relative_rank], MG_PASSER_START + relative_rank);
+                structure.eg +=
+                    sign * tuned(EG_PASSER[relative_rank], EG_PASSER_START + relative_rank);
+            }
+        }
+    }
+    structure
+}
+
+pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) -> i32 {
     let mut mg = 0;
     let mut eg = 0;
     let mut phase = 0;
@@ -186,6 +265,9 @@ pub(crate) fn evaluate(board: &Board) -> i32 {
         }
     }
 
+    mg += pawn_structure.mg;
+    eg += pawn_structure.eg;
+
     for color in [Color::White, Color::Black] {
         let sign = if color == Color::White { 1 } else { -1 };
         let pawns = board.colored_pieces(color, Piece::Pawn);
@@ -194,45 +276,12 @@ pub(crate) fn evaluate(board: &Board) -> i32 {
         for pawn in pawns {
             file_counts[pawn.file() as usize] += 1;
         }
-        for count in file_counts {
-            if count > 1 {
-                mg -= sign * (count - 1) * tuned(DOUBLED_PAWN_PENALTY_MG, DOUBLED_MG);
-                eg -= sign * (count - 1) * tuned(DOUBLED_PAWN_PENALTY_EG, DOUBLED_EG);
-            }
-        }
-        for pawn in pawns {
-            let file = pawn.file() as i32;
-            let rank = pawn.rank() as i32;
-            let isolated = (file == 0 || file_counts[(file - 1) as usize] == 0)
-                && (file == 7 || file_counts[(file + 1) as usize] == 0);
-            if isolated {
-                mg -= sign * tuned(ISOLATED_PAWN_PENALTY_MG, ISOLATED_MG);
-                eg -= sign * tuned(ISOLATED_PAWN_PENALTY_EG, ISOLATED_EG);
-            }
-            let passed = enemy_pawns.into_iter().all(|enemy| {
-                let close_file = ((enemy.file() as i32) - file).abs() <= 1;
-                let ahead = if color == Color::White {
-                    (enemy.rank() as i32) > rank
-                } else {
-                    (enemy.rank() as i32) < rank
-                };
-                !(close_file && ahead)
-            });
-            if passed {
-                let relative_rank = if color == Color::White {
-                    rank
-                } else {
-                    7 - rank
-                } as usize;
-                mg += sign * tuned(MG_PASSER[relative_rank], MG_PASSER_START + relative_rank);
-                eg += sign * tuned(EG_PASSER[relative_rank], EG_PASSER_START + relative_rank);
-                let own_king_dist = chebyshev_distance(board.king(color), pawn);
-                let enemy_king_dist = chebyshev_distance(board.king(!color), pawn);
-                eg += sign
-                    * (enemy_king_dist
-                        * tuned(PASSER_ENEMY_KING_DIST_WEIGHT_EG, PASSER_ENEMY_KING)
-                        - own_king_dist * tuned(PASSER_OWN_KING_DIST_WEIGHT_EG, PASSER_OWN_KING));
-            }
+        for pawn in pawn_structure.passers[color as usize] {
+            let own_king_dist = chebyshev_distance(board.king(color), pawn);
+            let enemy_king_dist = chebyshev_distance(board.king(!color), pawn);
+            eg += sign
+                * (enemy_king_dist * tuned(PASSER_ENEMY_KING_DIST_WEIGHT_EG, PASSER_ENEMY_KING)
+                    - own_king_dist * tuned(PASSER_OWN_KING_DIST_WEIGHT_EG, PASSER_OWN_KING));
         }
 
         if board.colored_pieces(color, Piece::Bishop).len() >= 2 {

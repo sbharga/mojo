@@ -68,6 +68,9 @@ CI (`.github/workflows/ci.yml`) runs, in order: `cargo fmt --check`, `cargo clip
   limit for deterministic timeout testing.
 - `engine/src/eval.rs` is the static evaluation function (material + terms)
   used by search and exposed for tests (e.g. color/turn symmetry).
+  `engine/src/search/pawn_cache.rs` keeps a 128 KiB pawn-Zobrist cache of
+  structure scores and passer bitboards; king-distance and rook-file terms
+  remain position-dependent and are evaluated outside the cache.
 - `engine/pkg/` is the **generated** `wasm-pack` output (JS glue + `.wasm`
   binary) that `web/` imports directly — it is committed and must be
   regenerated (`npm run build:engine`) after any `engine/src` change; it is

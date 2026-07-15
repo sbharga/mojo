@@ -6,13 +6,14 @@
 mod correction;
 mod moves;
 mod ordering;
+mod pawn_cache;
 mod see;
 mod tt;
 
 use arrayvec::ArrayVec;
 use cozy_chess::{Board, Color, Move, Piece};
 
-use crate::eval::{evaluate, insufficient_material};
+use crate::eval::insufficient_material;
 
 #[cfg(test)]
 pub(crate) use moves::legal_moves;
@@ -148,6 +149,7 @@ pub(crate) struct SearchCore {
     capture_history: Box<[i16]>,
     pawn_correction: Box<[i16]>,
     material_correction: Box<[i16]>,
+    pawn_cache: Box<[pawn_cache::PawnCacheEntry]>,
     static_evals: [i16; MAX_PLY],
     root_stats: ArrayVec<RootMoveStat, MAX_MOVES>,
     countermove: [[u16; 64]; 64],
@@ -186,6 +188,7 @@ impl SearchCore {
             capture_history: vec![0; ordering::CAPTURE_HISTORY_ENTRIES].into_boxed_slice(),
             pawn_correction: vec![0; correction::CORRECTION_HISTORY_ENTRIES].into_boxed_slice(),
             material_correction: vec![0; correction::CORRECTION_HISTORY_ENTRIES].into_boxed_slice(),
+            pawn_cache: pawn_cache::empty_cache(),
             static_evals: [i16::MIN; MAX_PLY],
             root_stats: ArrayVec::new(),
             countermove: [[0; 64]; 64],
@@ -260,8 +263,8 @@ impl SearchCore {
         self.path.clear();
         self.path.push(repetition_key(board));
         self.static_evals.fill(i16::MIN);
-        self.static_evals[0] =
-            compact_static_eval(self.corrected_static_eval(board, evaluate(board)));
+        let raw_eval = self.raw_evaluate(board);
+        self.static_evals[0] = compact_static_eval(self.corrected_static_eval(board, raw_eval));
         self.null_boundary = None;
         if self.is_draw(board) {
             return SearchResult {
@@ -480,7 +483,7 @@ impl SearchCore {
             return 0;
         }
         if ply >= MAX_PLY - 1 {
-            let raw_eval = evaluate(board);
+            let raw_eval = self.raw_evaluate(board);
             return self.corrected_static_eval(board, raw_eval);
         }
         if self.is_draw(board) {
@@ -606,7 +609,7 @@ impl SearchCore {
             Some(
                 entry
                     .and_then(TTEntry::static_eval)
-                    .unwrap_or_else(|| evaluate(board)),
+                    .unwrap_or_else(|| self.raw_evaluate(board)),
             )
         };
         let mut static_eval = raw_static_eval.map(|raw| self.corrected_static_eval(board, raw));
@@ -620,7 +623,7 @@ impl SearchCore {
             && depth <= RFP_MAX_DEPTH
             && beta.abs() < MATE_SCORE - MAX_PLY as i32
         {
-            let eval = *static_eval.get_or_insert_with(|| evaluate(board));
+            let eval = *static_eval.get_or_insert_with(|| self.raw_evaluate(board));
             static_eval = Some(eval);
             if eval - rfp_margin(depth, improving) >= beta {
                 return if board.generate_moves(|_| true) {
@@ -637,7 +640,7 @@ impl SearchCore {
             && depth <= RAZOR_MAX_DEPTH
             && beta.abs() < MATE_SCORE - MAX_PLY as i32
         {
-            let eval = *static_eval.get_or_insert_with(|| evaluate(board));
+            let eval = *static_eval.get_or_insert_with(|| self.raw_evaluate(board));
             if eval + RAZOR_MARGIN_BASE + RAZOR_MARGIN_PER_PLY * i32::from(depth) <= alpha {
                 let score = self.quiescence(board, alpha, alpha + 1, ply);
                 if self.timed_out {
@@ -953,7 +956,7 @@ impl SearchCore {
             return 0;
         }
         if ply >= MAX_PLY - 1 {
-            let raw_eval = evaluate(board);
+            let raw_eval = self.raw_evaluate(board);
             return self.corrected_static_eval(board, raw_eval);
         }
         if self.is_draw(board) {
@@ -981,7 +984,7 @@ impl SearchCore {
         }
         let raw_stand_pat = entry
             .and_then(TTEntry::static_eval)
-            .unwrap_or_else(|| evaluate(board));
+            .unwrap_or_else(|| self.raw_evaluate(board));
         let stand_pat = self.corrected_static_eval(board, raw_stand_pat);
         if !in_check {
             if stand_pat >= beta {
