@@ -3,6 +3,7 @@
 //! govern pruning/reduction. Move ordering lives in [`ordering`], SEE in
 //! [`see`], and generic move/position utilities in [`moves`].
 
+mod correction;
 mod moves;
 mod ordering;
 mod see;
@@ -106,6 +107,8 @@ pub(crate) struct SearchCore {
     history: [[i32; 64]; 64],
     continuation_history: Box<[i16]>,
     capture_history: Box<[i16]>,
+    pawn_correction: Box<[i16]>,
+    material_correction: Box<[i16]>,
     countermove: [[u16; 64]; 64],
     pv: [[u16; MAX_PLY]; MAX_PLY],
     pv_len: [u8; MAX_PLY],
@@ -134,6 +137,8 @@ impl SearchCore {
             continuation_history: vec![0; ordering::CONTINUATION_HISTORY_ENTRIES]
                 .into_boxed_slice(),
             capture_history: vec![0; ordering::CAPTURE_HISTORY_ENTRIES].into_boxed_slice(),
+            pawn_correction: vec![0; correction::CORRECTION_HISTORY_ENTRIES].into_boxed_slice(),
+            material_correction: vec![0; correction::CORRECTION_HISTORY_ENTRIES].into_boxed_slice(),
             countermove: [[0; 64]; 64],
             pv: [[0; MAX_PLY]; MAX_PLY],
             pv_len: [0; MAX_PLY],
@@ -166,6 +171,12 @@ impl SearchCore {
                 *value /= 2;
             }
             for value in &mut self.capture_history {
+                *value /= 2;
+            }
+            for value in &mut self.pawn_correction {
+                *value /= 2;
+            }
+            for value in &mut self.material_correction {
                 *value /= 2;
             }
             self.killers = [[None; 2]; MAX_PLY];
@@ -349,7 +360,8 @@ impl SearchCore {
             return 0;
         }
         if ply >= MAX_PLY - 1 {
-            return evaluate(board);
+            let raw_eval = evaluate(board);
+            return self.corrected_static_eval(board, raw_eval);
         }
         if self.is_draw(board) {
             return 0;
@@ -425,10 +437,16 @@ impl SearchCore {
             }
         }
 
-        let mut static_eval = entry.and_then(TTEntry::static_eval);
-        if static_eval.is_none() && !in_check {
-            static_eval = Some(evaluate(board));
-        }
+        let raw_static_eval = if in_check {
+            None
+        } else {
+            Some(
+                entry
+                    .and_then(TTEntry::static_eval)
+                    .unwrap_or_else(|| evaluate(board)),
+            )
+        };
+        let mut static_eval = raw_static_eval.map(|raw| self.corrected_static_eval(board, raw));
         if !pv_node
             && !in_check
             && depth <= RFP_MAX_DEPTH
@@ -621,13 +639,26 @@ impl SearchCore {
             Bound::Exact
         };
         if let Some(best_move) = best_move {
+            if !in_check
+                && let (Some(raw_eval), Some(corrected_eval)) = (raw_static_eval, static_eval)
+            {
+                self.update_correction_history(
+                    board,
+                    raw_eval,
+                    corrected_eval,
+                    best_score,
+                    depth,
+                    bound,
+                    bound == Bound::Lower && is_capture(board, best_move),
+                );
+            }
             self.store(
                 key,
                 depth,
                 score_to_tt(best_score, ply),
                 bound,
                 Some(best_move),
-                static_eval,
+                raw_static_eval,
             );
         }
         best_score
@@ -640,7 +671,8 @@ impl SearchCore {
             return 0;
         }
         if ply >= MAX_PLY - 1 {
-            return evaluate(board);
+            let raw_eval = evaluate(board);
+            return self.corrected_static_eval(board, raw_eval);
         }
         if self.is_draw(board) {
             return 0;
@@ -665,9 +697,10 @@ impl SearchCore {
         if !board.generate_moves(|_| true) {
             return terminal_score(board, ply);
         }
-        let stand_pat = entry
+        let raw_stand_pat = entry
             .and_then(TTEntry::static_eval)
             .unwrap_or_else(|| evaluate(board));
+        let stand_pat = self.corrected_static_eval(board, raw_stand_pat);
         if !in_check {
             if stand_pat >= beta {
                 self.store(
@@ -676,7 +709,7 @@ impl SearchCore {
                     score_to_tt(beta, ply),
                     Bound::Lower,
                     None,
-                    Some(stand_pat),
+                    Some(raw_stand_pat),
                 );
                 return beta;
             }
@@ -713,7 +746,7 @@ impl SearchCore {
                     score_to_tt(beta, ply),
                     Bound::Lower,
                     Some(mv),
-                    Some(stand_pat),
+                    Some(raw_stand_pat),
                 );
                 return beta;
             }
@@ -734,7 +767,7 @@ impl SearchCore {
             score_to_tt(alpha, ply),
             bound,
             best_move,
-            Some(stand_pat),
+            Some(raw_stand_pat),
         );
         alpha
     }
