@@ -86,6 +86,7 @@ async function analyze(request: AnalyzeRequest) {
           root_fen: request.fen,
           depth: 0,
           nodes: 0,
+          root_node_fraction: 1,
           elapsed_ms: performance.now() - started,
           timed_out: true,
           lines: [{ score_cp: 0, moves: [move] }],
