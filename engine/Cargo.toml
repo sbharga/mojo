@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 tuning = []
+spsa = []
 
 [[bin]]
 name = "texel"

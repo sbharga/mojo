@@ -12,6 +12,8 @@ mod tt;
 
 use arrayvec::ArrayVec;
 use cozy_chess::{Board, Color, Move, Piece};
+#[cfg(feature = "spsa")]
+use serde::Deserialize;
 
 use crate::eval::insufficient_material;
 
@@ -101,6 +103,47 @@ const PROBCUT_MIN_DEPTH: i16 = 5;
 const PROBCUT_MARGIN: i32 = 180;
 const PROBCUT_DEPTH_REDUCTION: i16 = 4;
 
+#[cfg(feature = "spsa")]
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SearchParameters {
+    aspiration_initial_delta: i32,
+    rfp_margin_per_ply: i32,
+    futility_margin_base: i32,
+    futility_margin_per_ply: i32,
+    probcut_margin: i32,
+    delta_pruning_margin: i32,
+}
+
+#[cfg(feature = "spsa")]
+impl SearchParameters {
+    pub(crate) fn validate(self) -> Result<Self, &'static str> {
+        let valid = (5..=100).contains(&self.aspiration_initial_delta)
+            && (40..=240).contains(&self.rfp_margin_per_ply)
+            && (20..=240).contains(&self.futility_margin_base)
+            && (20..=240).contains(&self.futility_margin_per_ply)
+            && (60..=320).contains(&self.probcut_margin)
+            && (40..=240).contains(&self.delta_pruning_margin);
+        valid
+            .then_some(self)
+            .ok_or("search parameter outside its tuning bounds")
+    }
+}
+
+#[cfg(feature = "spsa")]
+impl Default for SearchParameters {
+    fn default() -> Self {
+        Self {
+            aspiration_initial_delta: ASPIRATION_INITIAL_DELTA,
+            rfp_margin_per_ply: RFP_MARGIN_PER_PLY,
+            futility_margin_base: FUTILITY_MARGIN_BASE,
+            futility_margin_per_ply: FUTILITY_MARGIN_PER_PLY,
+            probcut_margin: PROBCUT_MARGIN,
+            delta_pruning_margin: DELTA_PRUNING_MARGIN,
+        }
+    }
+}
+
 type MoveList = ArrayVec<Move, MAX_MOVES>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,6 +225,8 @@ pub(crate) struct SearchCore {
     #[cfg(target_arch = "wasm32")]
     stop_request_id: i32,
     timed_out: bool,
+    #[cfg(feature = "spsa")]
+    parameters: SearchParameters,
     #[cfg(test)]
     node_limit: Option<u64>,
     #[cfg(test)]
@@ -234,6 +279,8 @@ impl SearchCore {
             #[cfg(target_arch = "wasm32")]
             stop_request_id: i32::MAX,
             timed_out: false,
+            #[cfg(feature = "spsa")]
+            parameters: SearchParameters::default(),
             #[cfg(test)]
             node_limit: None,
             #[cfg(test)]
@@ -253,6 +300,53 @@ impl SearchCore {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn set_stop_request(&mut self, request_id: i32) {
         self.stop_request_id = request_id;
+    }
+
+    #[cfg(feature = "spsa")]
+    pub(crate) fn set_parameters(&mut self, parameters: SearchParameters) {
+        self.parameters = parameters;
+    }
+
+    fn aspiration_initial_delta(&self) -> i32 {
+        #[cfg(feature = "spsa")]
+        return self.parameters.aspiration_initial_delta;
+        #[cfg(not(feature = "spsa"))]
+        ASPIRATION_INITIAL_DELTA
+    }
+
+    fn rfp_margin_per_ply(&self) -> i32 {
+        #[cfg(feature = "spsa")]
+        return self.parameters.rfp_margin_per_ply;
+        #[cfg(not(feature = "spsa"))]
+        RFP_MARGIN_PER_PLY
+    }
+
+    fn futility_margin_base(&self) -> i32 {
+        #[cfg(feature = "spsa")]
+        return self.parameters.futility_margin_base;
+        #[cfg(not(feature = "spsa"))]
+        FUTILITY_MARGIN_BASE
+    }
+
+    fn futility_margin_per_ply(&self) -> i32 {
+        #[cfg(feature = "spsa")]
+        return self.parameters.futility_margin_per_ply;
+        #[cfg(not(feature = "spsa"))]
+        FUTILITY_MARGIN_PER_PLY
+    }
+
+    fn probcut_margin(&self) -> i32 {
+        #[cfg(feature = "spsa")]
+        return self.parameters.probcut_margin;
+        #[cfg(not(feature = "spsa"))]
+        PROBCUT_MARGIN
+    }
+
+    fn delta_pruning_margin(&self) -> i32 {
+        #[cfg(feature = "spsa")]
+        return self.parameters.delta_pruning_margin;
+        #[cfg(not(feature = "spsa"))]
+        DELTA_PRUNING_MARGIN
     }
 
     pub(crate) fn set_position(&mut self, board: &Board, prior: &[Board]) {
@@ -358,8 +452,9 @@ impl SearchCore {
 
         for pv_index in 0..multi_pv.clamp(1, 5) as usize {
             let previous = self.previous_scores.get(pv_index).copied();
-            let (mut alpha, mut beta) = initial_aspiration_window(previous);
-            let mut delta = ASPIRATION_INITIAL_DELTA;
+            let aspiration_delta = self.aspiration_initial_delta();
+            let (mut alpha, mut beta) = initial_aspiration_window(previous, aspiration_delta);
+            let mut delta = aspiration_delta;
             let mut retries = 0;
             let mut line;
             loop {
@@ -724,7 +819,7 @@ impl SearchCore {
         {
             let eval = *static_eval.get_or_insert_with(|| self.raw_evaluate(board));
             static_eval = Some(eval);
-            if eval - rfp_margin(depth, improving) >= beta {
+            if eval - rfp_margin(depth, improving, self.rfp_margin_per_ply()) >= beta {
                 return if board.generate_moves(|_| true) {
                     eval
                 } else {
@@ -751,8 +846,16 @@ impl SearchCore {
             }
         }
 
-        if should_probcut(depth, beta, pv_node, in_check, excluded_move.is_some()) {
-            let probcut_beta = beta + PROBCUT_MARGIN;
+        let probcut_margin = self.probcut_margin();
+        if should_probcut(
+            depth,
+            beta,
+            pv_node,
+            in_check,
+            excluded_move.is_some(),
+            probcut_margin,
+        ) {
+            let probcut_beta = beta + probcut_margin;
             let mut captures = QuiescencePicker::new(board, false, self, ply);
             while let Some((mv, see)) = captures.next() {
                 if !is_capture(board, mv) || see < 0 {
@@ -895,7 +998,9 @@ impl SearchCore {
                 if quiet
                     && depth <= FUTILITY_MAX_DEPTH
                     && let Some(eval) = static_eval
-                    && eval + FUTILITY_MARGIN_BASE + FUTILITY_MARGIN_PER_PLY * i32::from(depth)
+                    && eval
+                        + self.futility_margin_base()
+                        + self.futility_margin_per_ply() * i32::from(depth)
                         <= alpha
                 {
                     continue;
@@ -1116,7 +1221,7 @@ impl SearchCore {
                 && capture
                 && mv.promotion.is_none()
                 && !gives_check
-                && stand_pat + captured_value(board, mv) + DELTA_PRUNING_MARGIN < alpha
+                && stand_pat + captured_value(board, mv) + self.delta_pruning_margin() < alpha
             {
                 continue;
             }
@@ -1427,11 +1532,11 @@ fn lmr_reduction(depth: i16, index: usize, context: LmrContext) -> i16 {
     reduction.clamp(0, depth - 1)
 }
 
-fn rfp_margin(depth: i16, improving: Option<bool>) -> i32 {
+fn rfp_margin(depth: i16, improving: Option<bool>, margin_per_ply: i32) -> i32 {
     let per_ply = if improving == Some(false) {
-        RFP_MARGIN_PER_PLY - RFP_NOT_IMPROVING_MARGIN_REDUCTION
+        margin_per_ply - RFP_NOT_IMPROVING_MARGIN_REDUCTION
     } else {
-        RFP_MARGIN_PER_PLY
+        margin_per_ply
     };
     per_ply * i32::from(depth)
 }
@@ -1449,13 +1554,13 @@ fn compact_static_eval(eval: i32) -> i16 {
     eval.clamp(i32::from(i16::MIN) + 1, i32::from(i16::MAX)) as i16
 }
 
-fn initial_aspiration_window(previous: Option<i32>) -> (i32, i32) {
+fn initial_aspiration_window(previous: Option<i32>, delta: i32) -> (i32, i32) {
     previous
         .filter(|score| score.abs() < MATE_SCORE - MAX_PLY as i32)
         .map_or((-INF, INF), |score| {
             (
-                score.saturating_sub(ASPIRATION_INITIAL_DELTA).max(-INF),
-                score.saturating_add(ASPIRATION_INITIAL_DELTA).min(INF),
+                score.saturating_sub(delta).max(-INF),
+                score.saturating_add(delta).min(INF),
             )
         })
 }
@@ -1578,12 +1683,13 @@ fn should_probcut(
     pv_node: bool,
     in_check: bool,
     exclusion_search: bool,
+    margin: i32,
 ) -> bool {
     depth >= PROBCUT_MIN_DEPTH
         && !pv_node
         && !in_check
         && !exclusion_search
-        && beta.abs() < MATE_SCORE - MAX_PLY as i32 - PROBCUT_MARGIN
+        && beta.abs() < MATE_SCORE - MAX_PLY as i32 - margin
 }
 
 fn has_non_pawn_material(board: &Board, color: Color) -> bool {
@@ -1747,9 +1853,9 @@ mod tests {
         assert_eq!(search.record_static_eval(4, 90), Some(false));
         assert_eq!(search.record_static_eval(1, 0), None);
 
-        assert_eq!(rfp_margin(3, Some(true)), 360);
-        assert_eq!(rfp_margin(3, None), 360);
-        assert_eq!(rfp_margin(3, Some(false)), 240);
+        assert_eq!(rfp_margin(3, Some(true), RFP_MARGIN_PER_PLY), 360);
+        assert_eq!(rfp_margin(3, None, RFP_MARGIN_PER_PLY), 360);
+        assert_eq!(rfp_margin(3, Some(false), RFP_MARGIN_PER_PLY), 240);
         assert_eq!(lmp_threshold(3, Some(true)), 13);
         assert_eq!(lmp_threshold(3, None), 13);
         assert_eq!(lmp_threshold(3, Some(false)), 11);
@@ -1808,11 +1914,11 @@ mod tests {
 
     #[test]
     fn probcut_uses_a_winning_capture_and_stores_a_reduced_bound() {
-        assert!(should_probcut(5, 0, false, false, false));
-        assert!(!should_probcut(4, 0, false, false, false));
-        assert!(!should_probcut(5, 0, true, false, false));
-        assert!(!should_probcut(5, 0, false, true, false));
-        assert!(!should_probcut(5, 0, false, false, true));
+        assert!(should_probcut(5, 0, false, false, false, PROBCUT_MARGIN));
+        assert!(!should_probcut(4, 0, false, false, false, PROBCUT_MARGIN));
+        assert!(!should_probcut(5, 0, true, false, false, PROBCUT_MARGIN));
+        assert!(!should_probcut(5, 0, false, true, false, PROBCUT_MARGIN));
+        assert!(!should_probcut(5, 0, false, false, true, PROBCUT_MARGIN));
 
         let board = "7k/3q4/8/8/8/8/3R4/7K w - - 0 1".parse::<Board>().unwrap();
         let mut search = SearchCore::new();
@@ -1829,8 +1935,8 @@ mod tests {
 
     #[test]
     fn aspiration_windows_widen_only_the_failed_side_before_fallback() {
-        assert_eq!(initial_aspiration_window(Some(100)), (80, 120));
-        assert_eq!(initial_aspiration_window(Some(30_000)), (-INF, INF));
+        assert_eq!(initial_aspiration_window(Some(100), 20), (80, 120));
+        assert_eq!(initial_aspiration_window(Some(30_000), 20), (-INF, INF));
         assert_eq!(
             widen_aspiration(80, 120, 120, 20, 1, AspirationFailure::High),
             (80, 160, 40)
@@ -1975,5 +2081,16 @@ mod tests {
         assert_eq!(reply.depth, 5);
         assert_eq!(decode_move(reply.best), Some(moves[1]));
         assert_eq!(score_from_tt(i32::from(reply.score), 1), -42);
+    }
+
+    #[cfg(feature = "spsa")]
+    #[test]
+    fn spsa_parameters_enforce_declared_bounds() {
+        assert!(SearchParameters::default().validate().is_ok());
+        let invalid = SearchParameters {
+            probcut_margin: 321,
+            ..SearchParameters::default()
+        };
+        assert!(invalid.validate().is_err());
     }
 }

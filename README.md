@@ -102,6 +102,18 @@ The fitter rejects tactical positions, deduplicates positions by Zobrist hash,
 averages conflicting game results, reserves a deterministic validation split,
 and records the input hash in the generated source.
 
+Search constants have a separate, feature-gated SPSA workflow. Build the
+tuning-only Wasm ABI and run paired, deterministic perturbations with:
+
+```bash
+npm --prefix web run build:engine:spsa
+npm --prefix web run tune:search -- --iterations 100 --openings 64 --depth 7
+```
+
+See [`engine/SPSA.md`](engine/SPSA.md) for parameter bounds, checkpointing,
+and reproducibility details. Treat the tuned values as candidates: require a
+fresh equal-time SPRT before changing the production defaults.
+
 The micro-NNUE tradeoff and the measurable gates for revisiting it are recorded
 in [`engine/NNUE_DECISION.md`](engine/NNUE_DECISION.md). The production build
 continues to use the HCE until a trained network clears those size, speed,
