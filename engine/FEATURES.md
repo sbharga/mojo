@@ -481,8 +481,12 @@ shipped engine, split into **build**, **validation gates** (part of
   cation (win/draw score thresholds), and optional training-data / JSON output.
 - **`spsa.mjs`** — SPSA search-parameter tuning: perturbs the six bounded
   `SearchParameters` (with per-parameter `c`/`a` step specs), plays gauntlets
-  via the `pkg-spsa` build (which enables `set_search_parameters`), and writes
-  `spsa-parameters.json`.
+  via the `pkg-spsa` build (which enables `set_search_parameters`). Its default
+  run is 10 iterations of 16 paired openings at 100 ms/move, with its
+  intermediate parameter file written outside the worktree. Candidates are
+  frozen into the shipping constants only after a color-swapped 128-opening
+  100 ms/move SPRT accepts +10 Elo at `alpha = beta = 0.05`; `--depth` remains
+  available as an explicit fixed-depth alternative.
 - **`generate-openings.mjs`** — regenerates `openings.json` from an ECO PGN
   (with a source-hash guard).
 - **`generate-book.mjs`** — converts an ECO PGN into opening lines, verifies

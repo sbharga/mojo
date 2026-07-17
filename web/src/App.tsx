@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { Chess, type Move, type Square } from 'chess.js'
-import { Chessboard } from 'react-chessboard'
+import { Chessboard as ReactChessboard, type ChessboardOptions } from 'react-chessboard'
 import { AnalysisPanel } from './components/AnalysisPanel'
 import { EvaluationBar } from './components/EvaluationBar'
 import { MoveHistory } from './components/MoveHistory'
@@ -16,6 +16,48 @@ import './styles.css'
 
 const initialFen = new Chess().fen()
 type Dialog = 'fen' | 'pgn' | 'export' | 'settings' | null
+
+type LegacyChessboardProps = {
+  id: string
+  position: string
+  boardOrientation: Side
+  onPieceDrop: (from: string, to: string, piece?: string) => boolean
+  onPieceClick: (piece: unknown, square: string) => void
+  onPieceDragBegin: (piece: unknown, square: string) => void
+  onSquareClick: (square: string) => void
+  arePiecesDraggable: boolean
+  autoPromoteToQueen: boolean
+  customArrows: Array<[Square, Square, string]>
+  boardWidth: number
+  customDarkSquareStyle: CSSProperties
+  customLightSquareStyle: CSSProperties
+  customSquareStyles: Record<string, CSSProperties>
+}
+
+// react-chessboard v5 moves its configuration into a single `options` prop.
+// Keep the app's existing board interface while translating to that API.
+function Chessboard({
+  id, position, boardOrientation: orientation, onPieceDrop, onPieceClick,
+  onPieceDragBegin, onSquareClick, arePiecesDraggable, customArrows,
+  boardWidth, customDarkSquareStyle, customLightSquareStyle, customSquareStyles,
+}: LegacyChessboardProps) {
+  const options: ChessboardOptions = {
+    id,
+    position,
+    boardOrientation: orientation,
+    onPieceDrop: ({ piece, sourceSquare, targetSquare }) => targetSquare !== null && onPieceDrop(sourceSquare, targetSquare, piece.pieceType),
+    onPieceClick: ({ piece, square }) => onPieceClick(piece, square ?? ''),
+    onPieceDrag: ({ piece, square }) => onPieceDragBegin(piece, square ?? ''),
+    onSquareClick: ({ square }) => onSquareClick(square),
+    canDragPiece: () => arePiecesDraggable,
+    arrows: customArrows.map(([startSquare, endSquare, color]) => ({ startSquare, endSquare, color })),
+    boardStyle: { width: boardWidth },
+    darkSquareStyle: customDarkSquareStyle,
+    lightSquareStyle: customLightSquareStyle,
+    squareStyles: customSquareStyles,
+  }
+  return <ReactChessboard options={options} />
+}
 
 function uciMove(uci: string) {
   return { from: uci.slice(0, 2) as Square, to: uci.slice(2, 4) as Square, promotion: uci[4] as 'q' | 'r' | 'b' | 'n' | undefined }

@@ -25,33 +25,28 @@
     "dev:book": "npm run prepare:stockfish && npm run build:engine:book && vite",
     "build": "npm run build:engine && tsc -b && vite build",
     "build:book": "npm run build:engine:book && tsc -b && vite build",
-    "lint": "eslint .",
+    "lint": "oxlint .",
     "test": "vitest run",
     "check": "npm run lint && tsc -b && npm run test && npm run test:openings && npm run test:strength && npm run test:cancellation && npm run test:seeding && npm run test:size && npm run test:selfplay"
   },
   "dependencies": {
     "chess.js": "^1.4.0",
-    "react": "^19.1.0",
-    "react-chessboard": "^4.7.1",
-    "react-dom": "^19.1.0",
+    "react": "^19.2.7",
+    "react-chessboard": "^5.10.0",
+    "react-dom": "^19.2.7",
     "stockfish": "18.0.8"
   },
   "devDependencies": {
-    "@eslint/js": "^9.24.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
-    "@types/node": "^22.15.3",
-    "@types/react": "^19.1.2",
-    "@types/react-dom": "^19.1.2",
-    "@vitejs/plugin-react": "^4.4.1",
-    "eslint": "^9.24.0",
-    "eslint-plugin-react-hooks": "^5.2.0",
-    "eslint-plugin-react-refresh": "^0.4.19",
-    "globals": "^16.0.0",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
     "jsdom": "^29.1.1",
-    "typescript": "~5.8.3",
-    "typescript-eslint": "^8.29.0",
-    "vite": "^6.3.3",
-    "vitest": "^3.1.2"
+    "oxlint": "^1.74.0",
+    "typescript": "~7.0.2",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
   }
 }
