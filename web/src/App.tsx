@@ -102,10 +102,16 @@ function App() {
   }, [dialog])
 
   useEffect(() => {
+    // A terminal position has no useful engine continuation. Cancelling here
+    // also prevents a final completed move from starting a redundant analysis.
     if (!isMojoReady) return
+    if (gameOver) {
+      cancel()
+      return
+    }
     start(fen, positionHistory, thinkTime, mojoToMove ? 'move' : 'analysis')
     return () => cancel()
-  }, [cancel, fen, isMojoReady, mojoToMove, positionHistory, start, thinkTime])
+  }, [cancel, fen, gameOver, isMojoReady, mojoToMove, positionHistory, start, thinkTime])
 
   useEffect(() => {
     if (!isStockfishReady) return

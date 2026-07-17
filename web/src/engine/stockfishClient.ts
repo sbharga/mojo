@@ -124,8 +124,13 @@ export class StockfishClient {
       return;
     }
     if (line.startsWith("info string CRITICAL ERROR")) {
+      // A search that reports a critical error does not reliably emit a
+      // subsequent `bestmove`. Clear it here so a newer pending position is
+      // not left waiting forever behind a search the engine has abandoned.
+      this.current = null;
       this.callbacks.onThinking(false);
       this.callbacks.onError(line.replace(/^info string /, ""));
+      this.schedule();
       return;
     }
     if (!line.startsWith("bestmove ")) return;

@@ -13,6 +13,11 @@ import { toWhiteRelative } from "./analysis";
 import { isCancelled } from "./stopSignal";
 import { supportsWasmSimd } from "./wasmFeatures";
 import { repetitionFingerprint } from "./repetitionFingerprint";
+import {
+  iterationBudget,
+  MAX_SEARCH_DEPTH,
+  shouldStopBeforeNextIteration,
+} from "./searchControl";
 
 let initialized = false;
 let cancelledBefore = 0;
@@ -86,18 +91,17 @@ async function analyze(request: AnalyzeRequest) {
     }
     let depth = 1;
     let latest: Analysis | null = null;
-    const maxDepth = 32;
     const multiPv = request.purpose === "move" ? 1 : 3;
     while (
       request.requestId > cancelledBefore
       && !isCancelled(stopFlag, request.requestId)
-      && depth <= maxDepth
+      && depth <= MAX_SEARCH_DEPTH
     ) {
       const remaining = request.thinkTimeMs - (performance.now() - started);
       if (remaining <= 0 && latest) break;
       // A full remaining budget lets the selected engine-time preset reach
       // meaningfully deeper searches; the Rust search checks its deadline.
-      const budget = Math.max(8, remaining);
+      const budget = iterationBudget(remaining);
       const result = toWhiteRelative(
         engine.analyze_depth(depth, multiPv, budget) as Omit<
           Analysis,
@@ -125,17 +129,14 @@ async function analyze(request: AnalyzeRequest) {
         } satisfies WorkerMessage);
       }
       if (result.timed_out) break;
-      if (
-        latest
-        && performance.now() - started
-          >= request.thinkTimeMs * result.soft_time_fraction
-      ) break;
-      const nextRemaining = request.thinkTimeMs - (performance.now() - started);
-      const predictionSafety = multiPv > 1 ? 1.5 : 1.25;
-      if (
-        !result.ebf_gate_override
-        && result.predicted_next_ms > nextRemaining * predictionSafety
-      ) break;
+      if (latest && shouldStopBeforeNextIteration({
+        elapsedMs: performance.now() - started,
+        thinkTimeMs: request.thinkTimeMs,
+        softTimeFraction: result.soft_time_fraction,
+        predictedNextMs: result.predicted_next_ms,
+        ebfGateOverride: result.ebf_gate_override,
+        multiPv,
+      })) break;
       depth += 1;
       // Each analyze_depth call is a single synchronous, uninterruptible Wasm
       // call, so this loop must yield back to the event loop between depths.

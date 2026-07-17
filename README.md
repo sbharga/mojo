@@ -36,13 +36,15 @@ analysis reference.
 ## Getting started
 
 Prerequisites: a Rust toolchain with the `wasm32-unknown-unknown` target,
-[`wasm-pack`](https://rustwasm.github.io/wasm-pack/) on your `PATH`, and Node.js.
+[`wasm-pack`](https://rustwasm.github.io/wasm-pack/) on your `PATH`, and Node.js
+24 (the version used by CI).
 
-All `npm` scripts run from `web/`:
+All web `npm` scripts run from `web/`. Use `npm ci` for a reproducible install;
+use `npm install` only when intentionally updating dependencies.
 
 ```sh
 cd web
-npm install
+npm ci
 npm run dev      # builds the engine Wasm, then starts the Vite dev server
 ```
 
@@ -67,6 +69,12 @@ The full validation gate (mirrors CI) runs from `web/`:
 ```sh
 npm run check    # lint + tsc + vitest + openings + strength + cancellation + seeding + size + selfplay
 ```
+
+The app uses `SharedArrayBuffer` for prompt search cancellation. The Vite
+configuration supplies the required cross-origin isolation headers locally;
+deployments must preserve those headers to enable this fast cancellation path.
+Without them, the engine remains functional and falls back to message-based
+cancellation between iterative-deepening passes.
 
 Offline pipelines (not part of `check`, since they alter tuned constants or
 measure strength):

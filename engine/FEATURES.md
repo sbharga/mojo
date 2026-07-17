@@ -449,7 +449,7 @@ shipped engine, split into **build**, **validation gates** (part of
   probe.
 
 ### Validation gates
-- **`validate-size.mjs`** — enforces the gzip size budget (225 KB) for both
+- **`validate-size.mjs`** — enforces the gzip size budget (230 KB) for both
   the baseline and SIMD Wasm; reports raw/gzip/brotli sizes.
 - **`validate-cancellation.mjs`** — asserts a stale stop watermark is ignored
   and a current watermark stops the search promptly (within ~2 clock-check
@@ -532,7 +532,7 @@ what does not, and the invariants any change must preserve.
 | KPK bitbase | 24 KiB | computed at init, not embedded |
 | LMR table | 2 KiB | 32×64 u8, `const fn` built |
 | Killers / static evals / PV | small | bounded by `MAX_PLY = 64` |
-| **Wasm gzip budget** | **≤ 225 KB** | enforced for baseline *and* SIMD in `validate-size.mjs` |
+| **Wasm gzip budget** | **≤ 230 KB** | enforced for baseline *and* SIMD in `validate-size.mjs` |
 
 `MAX_PLY = 64`, `MAX_MOVES = 218`, `MATE_SCORE = 30_000`, `INF = 32_000`.
 
@@ -608,4 +608,4 @@ base weights.
 - **Eval fit:** `texel` binary — logistic train/validation loss on a FEN/result
   TSV.
 - **Search-param optimization:** `spsa.mjs` — SPSA over the 6 exposed margins.
-- **Binary size:** `validate-size.mjs` — gzip/brotli against the 225 KB budget.
+- **Binary size:** `validate-size.mjs` — gzip/brotli against the 230 KB budget.
