@@ -9,7 +9,7 @@ import App from './App'
 const stockfishMock = vi.hoisted(() => ({ start: vi.fn(), cancel: vi.fn() }))
 
 vi.mock('react-chessboard', () => ({
-  Chessboard: ({ position, onPieceDrop }: { position: string; onPieceDrop: (from: string, to: string) => boolean }) => <div data-testid="chessboard" data-position={position}><button onClick={() => onPieceDrop('c7', 'c5')}>Play c5</button></div>,
+  Chessboard: ({ options }: { options: { position?: string; onPieceDrop?: ({ piece, sourceSquare, targetSquare }: { piece: { pieceType: string }; sourceSquare: string; targetSquare: string | null }) => boolean } }) => <div data-testid="chessboard" data-position={options.position}><button onClick={() => options.onPieceDrop?.({ piece: { pieceType: 'bP' }, sourceSquare: 'c7', targetSquare: 'c5' })}>Play c5</button></div>,
 }))
 
 vi.mock('./engine/useEngine', () => ({

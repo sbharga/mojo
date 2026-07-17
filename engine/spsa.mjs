@@ -17,23 +17,38 @@ const specs = {
 function parseArgs(argv) {
   const options = {
     iterations: 10,
-    openings: 8,
-    depth: 4,
+    openings: 16,
+    depth: undefined,
+    moveTimeMs: 100,
     seed: 0x4d4f4a4f,
     wasm: 'engine/pkg-spsa/mojo_engine_bg.wasm',
     glue: 'engine/pkg-spsa/mojo_engine.js',
-    output: 'engine/spsa-parameters.json',
+    output: join(tmpdir(), 'mojo-spsa-parameters.json'),
   }
+  let explicitDepth = false
+  let explicitMoveTime = false
   for (let index = 0; index < argv.length; index += 2) {
     const key = argv[index]?.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())
     const value = argv[index + 1]
     if (!key || value === undefined || !(key in options)) throw new Error(`Invalid SPSA option ${argv[index] ?? ''}`)
     options[key] = ['wasm', 'glue', 'output'].includes(key) ? value : Number(value)
+    explicitDepth ||= key === 'depth'
+    explicitMoveTime ||= key === 'moveTimeMs'
   }
-  for (const key of ['iterations', 'openings', 'depth', 'seed']) {
+  if (explicitDepth && explicitMoveTime) {
+    throw new Error('--depth and --move-time-ms are mutually exclusive')
+  }
+  if (explicitDepth) options.moveTimeMs = undefined
+  for (const key of ['iterations', 'openings', 'seed']) {
     if (!Number.isInteger(options[key]) || options[key] < (key === 'iterations' ? 0 : 1)) {
       throw new Error(`--${key} must be an integer in range`)
     }
+  }
+  if (explicitDepth && (!Number.isInteger(options.depth) || options.depth < 1)) {
+    throw new Error('--depth must be a positive integer')
+  }
+  if (options.moveTimeMs !== undefined && (!Number.isFinite(options.moveTimeMs) || options.moveTimeMs < 5)) {
+    throw new Error('--move-time-ms must be at least 5')
   }
   return options
 }
@@ -62,7 +77,13 @@ const values = Object.fromEntries(Object.entries(specs).map(([name, spec]) => [n
 const output = resolve(repositoryRoot, options.output)
 if (options.iterations === 0) {
   writeParameters(output, values)
-  console.log({ iterations: 0, parameters: values, confirmation: 'run normal fixed-time SPRT before merging' })
+  console.log({
+    iterations: 0,
+    parameters: values,
+    search_limit: options.moveTimeMs === undefined ? `depth ${options.depth}` : `${options.moveTimeMs} ms/move`,
+    seed: options.seed,
+    confirmation: 'run a 128-opening +10 Elo SPRT at 100 ms/move before merging tuned values',
+  })
   process.exit(0)
 }
 
@@ -91,7 +112,9 @@ try {
       '--glue', options.glue,
       '--baseline-params', minusPath,
       '--candidate-params', plusPath,
-      '--depth', String(options.depth),
+      ...(options.moveTimeMs === undefined
+        ? ['--depth', String(options.depth)]
+        : ['--move-time-ms', String(options.moveTimeMs)]),
       '--openings', String(options.openings),
       '--json-output', reportPath,
     ], { cwd: repositoryRoot, stdio: 'inherit' })
@@ -105,9 +128,20 @@ try {
       )
     }
     writeParameters(output, values)
-    console.log({ iteration: iteration + 1, score, parameters: values })
+    console.log({
+      iteration: iteration + 1,
+      score,
+      search_limit: options.moveTimeMs === undefined ? `depth ${options.depth}` : `${options.moveTimeMs} ms/move`,
+      seed: options.seed,
+      parameters: values,
+    })
   }
-  console.log({ output, confirmation: 'run normal fixed-time SPRT before merging tuned values' })
+  console.log({
+    output,
+    search_limit: options.moveTimeMs === undefined ? `depth ${options.depth}` : `${options.moveTimeMs} ms/move`,
+    seed: options.seed,
+    confirmation: 'run a 128-opening +10 Elo SPRT at 100 ms/move before merging tuned values',
+  })
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }

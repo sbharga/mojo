@@ -81,12 +81,16 @@ measure strength):
 
 ```sh
 npm run tune:eval      # Texel evaluation tuning
-npm run tune:search    # SPSA search-parameter tuning
+npm run tune:search    # 10 × 16-opening SPSA at 100 ms/move; output goes to /tmp
 npm run bench:engine   # benchmark
 npm run selfplay       # self-play harness
 ```
 
 See [CLAUDE.md](CLAUDE.md) for a deeper tour of the architecture.
+
+Search-parameter candidates are exploratory until they pass a color-swapped,
+128-opening self-play SPRT at 100 ms/move. Ship a candidate only when that
+test accepts the +10 Elo hypothesis at `alpha = beta = 0.05`.
 
 ## License
 

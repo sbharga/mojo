@@ -39,7 +39,7 @@ npm run build:engine        # wasm-pack build → engine/pkg; also emits a +simd
 npm run dev                 # rebuild engine, then vite dev server
 npm run build               # build:engine, tsc -b, vite build
 npm test                    # vitest run (append a path/-t pattern for one test)
-npm run lint                # eslint
+npm run lint                # oxlint
 ```
 
 **Full validation gate** (mirrors CI; run before finishing engine/UI changes):
