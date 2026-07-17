@@ -232,10 +232,13 @@ Staged, incremental move selection plus the cutoff bookkeeping.
   flag, previous score, previous subtree node count, then a static fallback
   (TT move → tactical SEE score → history). This makes iterative deepening
   re-examine the most promising and most-worked root moves first.
-- **`MovePicker`** — five-stage generator: **TT move → tactical (captures/
-  promotions, SEE-scored) → special (killers, countermove, threat move) →
-  quiet (history-scored) → done**. Selection is incremental (best-of-remaining
-  scan), and every legal move is returned exactly once (verified by test).
+- **`MovePicker`** — staged generator: **TT move → non-losing tactical
+  (captures with SEE ≥ 0 plus promotions) → special (killers, countermove,
+  threat move) → losing captures → quiet (history-scored) → done**. Losing
+  captures are held in a compact fixed-capacity move list, so their SEE is not
+  recomputed and they do not require a second scored-move array. Selection is
+  incremental (best-of-remaining scan), and every legal move is returned
+  exactly once (verified by test).
 - **`QuiescencePicker`** — generates captures/promotions (or all evasions when
   in check), scoring each by SEE class + capture history + captured value, and
   yields `(move, see)` pairs.
@@ -470,7 +473,9 @@ shipped engine, split into **build**, **validation gates** (part of
 ### Strength / tuning pipelines
 - **`bench.mjs`** — per-position node/time benchmark across start/tactical/
   middlegame/endgame FENs, isolating each sample in a fresh engine and matching
-  the browser time-management path.
+  the browser time-management path. `--fixed-depth N` reports deterministic
+  cumulative iterative-deepening nodes, and `--wasm PATH` benchmarks a saved
+  baseline artifact through the current ABI.
 - **`selfplay.mjs`** — SPRT-style self-play harness (baseline vs. candidate
   Wasm) over an opening set, with configurable Elo bounds, alpha/beta, adjudi-
   cation (win/draw score thresholds), and optional training-data / JSON output.
