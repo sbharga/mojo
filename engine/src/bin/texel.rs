@@ -5,9 +5,10 @@ use std::{
     process::ExitCode,
 };
 
-use cozy_chess::Board;
+use cozy_chess::{Board, Color};
 use mojo_engine::tuning::{
-    PARAMETER_COUNT, current_weights, extract, generated_source, is_quiet, tuned_source_hash,
+    PARAMETER_COUNT, current_weights, extract, generated_source, is_quiet, symmetrize,
+    tuned_source_hash,
 };
 
 const DEFAULT_EPOCHS: usize = 100;
@@ -107,6 +108,10 @@ fn run() -> Result<(), String> {
             }
         }
     }
+
+    // The evaluator is left-right symmetric; restore that invariant on the
+    // independently-fit per-square PST parameters before emitting the deltas.
+    symmetrize(&mut weights);
 
     write_atomically(
         &options.output,
@@ -215,10 +220,24 @@ fn load_samples(bytes: &[u8]) -> Result<(Vec<Sample>, usize, usize), String> {
     }
     let mut samples: Vec<_> = unique
         .into_iter()
-        .map(|(hash, (board, result_sum, count))| Sample {
-            board,
-            result: result_sum / count as f64,
-            validation: hash % 10 == 0,
+        .map(|(hash, (board, result_sum, count))| {
+            // Records label the *white* result, but `extract`/`value` produce a
+            // side-to-move-relative score (perspective = color_sign(stm), the
+            // negamax convention). Convert the target into the side-to-move
+            // frame so the logistic objective and its gradient share one
+            // perspective; otherwise black-to-move samples train on a flipped
+            // sign and cancel the gradient.
+            let white_result = result_sum / count as f64;
+            let result = if board.side_to_move() == Color::White {
+                white_result
+            } else {
+                1.0 - white_result
+            };
+            Sample {
+                board,
+                result,
+                validation: hash % 10 == 0,
+            }
         })
         .collect();
     samples.sort_unstable_by_key(|sample| sample.board.hash());
@@ -291,6 +310,17 @@ mod tests {
         let (samples, parsed, quiet) = load_samples(input.as_bytes()).unwrap();
         assert_eq!((parsed, quiet, samples.len()), (2, 2, 1));
         assert_eq!(samples[0].result, 0.5);
+    }
+
+    #[test]
+    fn black_to_move_result_is_converted_to_side_to_move_frame() {
+        // A quiet, king-only position with Black to move. The record labels the
+        // white result (1 = white wins), so from Black's perspective the target
+        // must be flipped to 0.
+        let input = "1\t4k3/8/8/8/8/8/8/4K3 b - - 0 1\n";
+        let (samples, parsed, quiet) = load_samples(input.as_bytes()).unwrap();
+        assert_eq!((parsed, quiet, samples.len()), (1, 1, 1));
+        assert_eq!(samples[0].result, 0.0);
     }
 
     #[test]
