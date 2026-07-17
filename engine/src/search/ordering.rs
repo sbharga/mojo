@@ -10,7 +10,7 @@ use super::moves::{
     captured_value, encode_move, is_capture, legal_moves, quiet_moves, tactical_moves,
 };
 use super::see::static_exchange;
-use super::{MAX_MOVES, MAX_PLY, SearchCore};
+use super::{MAX_MOVES, MAX_PLY, MoveList, SearchCore};
 
 const PIECE_TO_SQUARE: usize = 6 * 64;
 pub(crate) const CONTINUATION_HISTORY_ENTRIES: usize = PIECE_TO_SQUARE * PIECE_TO_SQUARE;
@@ -101,8 +101,10 @@ fn root_key(candidate: RootCandidate) -> (bool, i32, u64, i32) {
 enum Stage {
     Tt,
     Tactical,
+    GoodTactical,
     Special,
     Quiet,
+    BadTactical,
     Done,
 }
 
@@ -116,6 +118,7 @@ pub(crate) struct MovePicker<'a> {
     special_index: usize,
     stage: Stage,
     scored: ScoredMoves,
+    bad_tacticals: MoveList,
 }
 
 impl<'a> MovePicker<'a> {
@@ -140,6 +143,7 @@ impl<'a> MovePicker<'a> {
             special_index: 0,
             stage: Stage::Tt,
             scored: ArrayVec::new(),
+            bad_tacticals: ArrayVec::new(),
         }
     }
 
@@ -155,15 +159,32 @@ impl<'a> MovePicker<'a> {
                     }
                 }
                 Stage::Tactical => {
-                    if self.scored.is_empty() {
-                        self.scored.extend(
-                            tactical_moves(self.board)
-                                .into_iter()
-                                .filter(|mv| Some(*mv) != self.tt_move)
-                                .filter(|mv| !self.excluded.contains(mv))
-                                .map(|mv| (tactical_score(self.board, mv, search), mv)),
-                        );
+                    for mv in tactical_moves(self.board)
+                        .into_iter()
+                        .filter(|mv| Some(*mv) != self.tt_move)
+                        .filter(|mv| !self.excluded.contains(mv))
+                    {
+                        let capture = is_capture(self.board, mv);
+                        let see = if capture {
+                            static_exchange(self.board, mv)
+                        } else {
+                            0
+                        };
+                        if capture && see < 0 {
+                            self.bad_tacticals.push(mv);
+                        } else {
+                            let score = tactical_score_with_see(
+                                self.board,
+                                mv,
+                                see,
+                                search.capture_history_score(self.board, mv),
+                            );
+                            self.scored.push((score, mv));
+                        }
                     }
+                    self.stage = Stage::GoodTactical;
+                }
+                Stage::GoodTactical => {
                     if let Some(mv) = select_best(&mut self.scored) {
                         if self.scored.is_empty() {
                             self.stage = Stage::Special;
@@ -186,7 +207,7 @@ impl<'a> MovePicker<'a> {
                             return Some(mv);
                         }
                     }
-                    self.stage = Stage::Quiet;
+                    self.stage = Stage::BadTactical;
                 }
                 Stage::Quiet => {
                     if self.scored.is_empty() {
@@ -216,6 +237,26 @@ impl<'a> MovePicker<'a> {
                         return Some(mv);
                     }
                     self.stage = Stage::Done;
+                }
+                Stage::BadTactical => {
+                    if self.scored.is_empty() {
+                        self.scored.extend(self.bad_tacticals.drain(..).map(|mv| {
+                            let score = tactical_score_with_see(
+                                self.board,
+                                mv,
+                                -1,
+                                search.capture_history_score(self.board, mv),
+                            );
+                            (score, mv)
+                        }));
+                    }
+                    if let Some(mv) = select_best(&mut self.scored) {
+                        if self.scored.is_empty() {
+                            self.stage = Stage::Quiet;
+                        }
+                        return Some(mv);
+                    }
+                    self.stage = Stage::Quiet;
                 }
                 Stage::Done => return None,
             }
@@ -509,6 +550,71 @@ mod tests {
         let mut picker = MovePicker::new(&board, None, [None; 2], None, Some(threat), None, 0, &[]);
 
         assert_eq!(picker.next(&search), Some(threat));
+    }
+
+    #[test]
+    fn losing_captures_are_deferred_until_after_specials() {
+        let board = "3rk3/8/8/3pp3/3Q4/8/8/4K3 w - - 0 1"
+            .parse::<Board>()
+            .unwrap();
+        let good_capture = "d4e5".parse().unwrap();
+        let quiet = "d4a4".parse().unwrap();
+        let bad_capture = "d4d5".parse().unwrap();
+        let search = SearchCore::new();
+
+        assert!(crate::search::see::static_exchange(&board, good_capture) >= 0);
+        assert!(crate::search::see::static_exchange(&board, bad_capture) < 0);
+
+        let mut picker =
+            MovePicker::new(&board, None, [Some(quiet), None], None, None, None, 0, &[]);
+        let mut picked = Vec::new();
+        while let Some(mv) = picker.next(&search) {
+            picked.push(mv);
+        }
+
+        let good_index = picked.iter().position(|mv| *mv == good_capture).unwrap();
+        let quiet_index = picked.iter().position(|mv| *mv == quiet).unwrap();
+        let bad_index = picked.iter().position(|mv| *mv == bad_capture).unwrap();
+        assert!(good_index < quiet_index);
+        assert!(quiet_index < bad_index);
+
+        let mut tt_picker = MovePicker::new(
+            &board,
+            Some(bad_capture),
+            [Some(quiet), None],
+            None,
+            None,
+            None,
+            0,
+            &[],
+        );
+        assert_eq!(tt_picker.next(&search), Some(bad_capture));
+    }
+
+    #[test]
+    fn non_capture_promotions_remain_early_tacticals() {
+        let board = "4k3/P7/8/8/8/8/8/4K3 w - - 0 1".parse::<Board>().unwrap();
+        let quiet = "e1e2".parse().unwrap();
+        let search = SearchCore::new();
+        let mut picker =
+            MovePicker::new(&board, None, [Some(quiet), None], None, None, None, 0, &[]);
+        let mut picked = Vec::new();
+        while let Some(mv) = picker.next(&search) {
+            picked.push(mv);
+        }
+
+        let quiet_index = picked.iter().position(|mv| *mv == quiet).unwrap();
+        let promotion_indices: Vec<_> = picked
+            .iter()
+            .enumerate()
+            .filter_map(|(index, mv)| mv.promotion.map(|_| index))
+            .collect();
+        assert_eq!(promotion_indices.len(), 4);
+        assert!(
+            promotion_indices
+                .into_iter()
+                .all(|index| index < quiet_index)
+        );
     }
 
     #[test]

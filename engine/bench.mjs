@@ -1,9 +1,33 @@
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib'
 import { Engine, initSync } from './pkg/mojo_engine.js'
 
-const wasmBytes = readFileSync(new URL('./pkg/mojo_engine_bg.wasm', import.meta.url))
-const simdWasmBytes = readFileSync(new URL('./pkg/mojo_engine_simd_bg.wasm', import.meta.url))
+let fixedDepth
+let wasmPath
+for (let index = 2; index < process.argv.length; index += 1) {
+  const argument = process.argv[index]
+  const value = process.argv[index + 1]
+  if (argument === '--fixed-depth') {
+    fixedDepth = Number(value)
+    if (!Number.isInteger(fixedDepth) || fixedDepth < 1) {
+      throw new Error('--fixed-depth requires a positive integer')
+    }
+    index += 1
+  } else if (argument === '--wasm') {
+    if (!value) throw new Error('--wasm requires an artifact path')
+    wasmPath = resolve(process.cwd(), value)
+    index += 1
+  } else {
+    throw new Error(`unknown argument: ${argument}`)
+  }
+}
+
+const defaultWasmUrl = new URL('./pkg/mojo_engine_bg.wasm', import.meta.url)
+const wasmBytes = readFileSync(wasmPath ?? defaultWasmUrl)
+const simdWasmBytes = wasmPath
+  ? undefined
+  : readFileSync(new URL('./pkg/mojo_engine_simd_bg.wasm', import.meta.url))
 const wasm = initSync({ module: wasmBytes })
 const initialMemory = wasm.memory.buffer.byteLength
 const positions = [
@@ -61,27 +85,68 @@ function runPosition(name, fen, thinkTimeMs, multiPv) {
   }
 }
 
+function runFixedDepth(name, fen, targetDepth, multiPv) {
+  const engine = new Engine()
+  try {
+    const stopFlag = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
+    engine.set_stop_flag(stopFlag)
+    engine.set_stop_request(1)
+    engine.set_position(fen, [])
+    const started = performance.now()
+    let latest
+    let cumulativeNodes = 0
+    for (let depth = 1; depth <= targetDepth; depth += 1) {
+      const result = engine.analyze_depth(depth, multiPv, 60_000)
+      if (result.timed_out || result.lines.length === 0) {
+        throw new Error(`${name} failed to complete fixed depth ${depth}`)
+      }
+      cumulativeNodes += Number(result.nodes)
+      latest = result
+    }
+    return {
+      position: name,
+      target_depth: targetDepth,
+      multipv: multiPv,
+      wall_ms: Math.round(performance.now() - started),
+      cumulative_nodes: cumulativeNodes,
+      final_iteration_nodes: Number(latest.nodes),
+      best_move: latest.lines[0]?.moves[0] ?? null,
+      score_cp: latest.lines[0]?.score_cp ?? null,
+    }
+  } finally {
+    engine.free()
+  }
+}
+
 const results = []
 for (const [name, fen] of positions) {
-  for (const budget of [100, 500, 1000]) {
-    results.push(runPosition(name, fen, budget, 1))
-    results.push(runPosition(name, fen, budget, 3))
+  if (fixedDepth) {
+    results.push(runFixedDepth(name, fen, fixedDepth, 1))
+    results.push(runFixedDepth(name, fen, fixedDepth, 3))
+  } else {
+    for (const budget of [100, 500, 1000]) {
+      results.push(runPosition(name, fen, budget, 1))
+      results.push(runPosition(name, fen, budget, 3))
+    }
   }
 }
 const peakMemory = wasm.memory.buffer.byteLength
+const artifactLabel = wasmPath ? 'tested' : 'baseline'
 
 console.table(results)
 console.log({
-  baseline_wasm_raw_bytes: wasmBytes.byteLength,
-  baseline_wasm_gzip_bytes: gzipSync(wasmBytes).byteLength,
-  baseline_wasm_brotli_bytes: brotliCompressSync(wasmBytes, {
+  [`${artifactLabel}_wasm_raw_bytes`]: wasmBytes.byteLength,
+  [`${artifactLabel}_wasm_gzip_bytes`]: gzipSync(wasmBytes).byteLength,
+  [`${artifactLabel}_wasm_brotli_bytes`]: brotliCompressSync(wasmBytes, {
     params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
   }).byteLength,
-  simd_wasm_raw_bytes: simdWasmBytes.byteLength,
-  simd_wasm_gzip_bytes: gzipSync(simdWasmBytes).byteLength,
-  simd_wasm_brotli_bytes: brotliCompressSync(simdWasmBytes, {
-    params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
-  }).byteLength,
+  ...(simdWasmBytes && {
+    simd_wasm_raw_bytes: simdWasmBytes.byteLength,
+    simd_wasm_gzip_bytes: gzipSync(simdWasmBytes).byteLength,
+    simd_wasm_brotli_bytes: brotliCompressSync(simdWasmBytes, {
+      params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
+    }).byteLength,
+  }),
   initial_memory_bytes: initialMemory,
   peak_memory_bytes: peakMemory,
 })
