@@ -97,4 +97,20 @@ describe("StockfishClient", () => {
     expect(worker.messages.at(-1)).toBe("quit");
     expect(worker.terminated).toBe(true);
   });
+
+  it("continues with a newer queued position after a search error", () => {
+    const { worker, callbacks, client } = setup();
+    initialize(worker);
+    client.start({ rootFen: "first", moves: [], elo: 1500, thinkTimeMs: 100 });
+    worker.emit("readyok");
+    client.start({ rootFen: "second", moves: ["d2d4"], elo: 2100, thinkTimeMs: 700 });
+
+    worker.emit("info string CRITICAL ERROR search aborted");
+    expect(callbacks.onError).toHaveBeenCalledWith("CRITICAL ERROR search aborted");
+    expect(worker.messages).toContain("setoption name UCI_Elo value 2100");
+
+    worker.emit("readyok");
+    expect(worker.messages).toContain("position fen second moves d2d4");
+    expect(worker.messages).toContain("go movetime 700");
+  });
 });
