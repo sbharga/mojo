@@ -112,12 +112,14 @@ pub(crate) struct MovePicker<'a> {
     excluded: &'a [Move],
     special: [Option<Move>; 4],
     prev_move: Option<Move>,
+    ply: usize,
     special_index: usize,
     stage: Stage,
     scored: ScoredMoves,
 }
 
 impl<'a> MovePicker<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         board: &'a Board,
         tt_move: Option<Move>,
@@ -125,6 +127,7 @@ impl<'a> MovePicker<'a> {
         countermove: Option<Move>,
         threat_move: Option<Move>,
         prev_move: Option<Move>,
+        ply: usize,
         excluded: &'a [Move],
     ) -> Self {
         Self {
@@ -133,6 +136,7 @@ impl<'a> MovePicker<'a> {
             excluded,
             special: [killers[0], killers[1], countermove, threat_move],
             prev_move,
+            ply,
             special_index: 0,
             stage: Stage::Tt,
             scored: ArrayVec::new(),
@@ -194,7 +198,12 @@ impl<'a> MovePicker<'a> {
                                 .filter(|mv| !self.excluded.contains(mv))
                                 .map(|mv| {
                                     (
-                                        search.quiet_history_score(self.board, mv, self.prev_move),
+                                        search.quiet_history_score(
+                                            self.board,
+                                            mv,
+                                            self.prev_move,
+                                            self.ply,
+                                        ),
                                         mv,
                                     )
                                 }),
@@ -332,10 +341,23 @@ impl SearchCore {
         board: &Board,
         mv: Move,
         prev_move: Option<Move>,
+        ply: usize,
     ) -> i32 {
-        self.history[mv.from as usize][mv.to as usize]
+        let mut score = self.history[mv.from as usize][mv.to as usize]
             + continuation_index(board, prev_move, mv)
-                .map_or(0, |index| i32::from(self.continuation_history[index]))
+                .map_or(0, |index| i32::from(self.continuation_history[index]));
+        if let Some(index) = self.continuation2_index(board, mv, ply) {
+            score += i32::from(self.continuation_history_2[index]);
+        }
+        score
+    }
+
+    /// Index into the 2-ply-back continuation table for `mv` at `ply`, using the
+    /// move played two plies earlier (recorded in `conthist_stack`).
+    fn continuation2_index(&self, board: &Board, mv: Move, ply: usize) -> Option<usize> {
+        let prev2 = ply.checked_sub(2).and_then(|p| self.conthist_stack[p])?;
+        let candidate = move_base_index(board, mv)?;
+        Some(prev2 * PIECE_TO_SQUARE + candidate)
     }
 
     pub(crate) fn record_quiet_cutoff(
@@ -352,10 +374,10 @@ impl SearchCore {
             self.killers[ply][0] = Some(mv);
         }
         let bonus = i32::from(depth).pow(2).min(HISTORY_BONUS_CAP);
-        self.update_quiet_history(board, mv, prev_move, bonus);
+        self.update_quiet_history(board, mv, prev_move, ply, bonus);
         for &failed in searched_quiets {
             if failed != mv {
-                self.update_quiet_history(board, failed, prev_move, -bonus);
+                self.update_quiet_history(board, failed, prev_move, ply, -bonus);
             }
         }
         if let Some(prev) = prev_move {
@@ -368,13 +390,25 @@ impl SearchCore {
         board: &Board,
         mv: Move,
         prev_move: Option<Move>,
+        ply: usize,
         bonus: i32,
     ) {
         update_history(&mut self.history[mv.from as usize][mv.to as usize], bonus);
         if let Some(index) = continuation_index(board, prev_move, mv) {
             update_continuation(&mut self.continuation_history[index], bonus);
         }
+        if let Some(index) = self.continuation2_index(board, mv, ply) {
+            update_continuation(&mut self.continuation_history_2[index], bonus);
+        }
     }
+}
+
+/// Continuation base index (`piece * 64 + to`) of a move about to be played on
+/// `board`, i.e. the piece is read from its origin square before the move. Used to
+/// seed `conthist_stack` for multi-ply continuation lookups.
+pub(crate) fn move_base_index(board: &Board, mv: Move) -> Option<usize> {
+    let piece = board.piece_on(mv.from)? as usize;
+    Some(piece * 64 + mv.to as usize)
 }
 
 fn continuation_index(board: &Board, prev_move: Option<Move>, mv: Move) -> Option<usize> {
@@ -419,8 +453,9 @@ mod tests {
     use cozy_chess::Board;
 
     use super::{
-        CAPTURE_HISTORY_ENTRIES, CONTINUATION_HISTORY_ENTRIES, MovePicker, RootMovePicker,
-        RootMoveStat, SearchCore, capture_history_index, continuation_index,
+        CAPTURE_HISTORY_ENTRIES, CONTINUATION_HISTORY_ENTRIES, MovePicker, PIECE_TO_SQUARE,
+        RootMovePicker, RootMoveStat, SearchCore, capture_history_index, continuation_index,
+        move_base_index,
     };
     use crate::search::moves::{encode_move, legal_moves, played};
 
@@ -438,7 +473,8 @@ mod tests {
         let board = Board::default();
         let tt_move = "e2e4".parse().unwrap();
         let search = SearchCore::new();
-        let mut picker = MovePicker::new(&board, Some(tt_move), [None; 2], None, None, None, &[]);
+        let mut picker =
+            MovePicker::new(&board, Some(tt_move), [None; 2], None, None, None, 0, &[]);
 
         assert_eq!(picker.next(&search), Some(tt_move));
         assert!(picker.scored.is_empty());
@@ -453,7 +489,7 @@ mod tests {
         let search = SearchCore::new();
         let tt_move = "e2a6".parse().unwrap();
         let killers = [Some("e1h1".parse().unwrap()), Some("e1a1".parse().unwrap())];
-        let mut picker = MovePicker::new(&board, Some(tt_move), killers, None, None, None, &[]);
+        let mut picker = MovePicker::new(&board, Some(tt_move), killers, None, None, None, 0, &[]);
         let mut picked = Vec::new();
         while let Some(mv) = picker.next(&search) {
             picked.push(encode_move(mv));
@@ -470,7 +506,7 @@ mod tests {
         let board = Board::default();
         let threat = "e2e4".parse().unwrap();
         let search = SearchCore::new();
-        let mut picker = MovePicker::new(&board, None, [None; 2], None, Some(threat), None, &[]);
+        let mut picker = MovePicker::new(&board, None, [None; 2], None, Some(threat), None, 0, &[]);
 
         assert_eq!(picker.next(&search), Some(threat));
     }
@@ -526,12 +562,38 @@ mod tests {
         let failed_index = continuation_index(&board, Some(previous), failed).unwrap();
         assert!(search.continuation_history[cutoff_index] > 0);
         assert!(search.continuation_history[failed_index] < 0);
-        assert!(search.quiet_history_score(&board, cutoff, Some(previous)) > 0);
-        assert!(search.quiet_history_score(&board, failed, Some(previous)) < 0);
+        assert!(search.quiet_history_score(&board, cutoff, Some(previous), 1) > 0);
+        assert!(search.quiet_history_score(&board, failed, Some(previous), 1) < 0);
 
         let before_decay = search.continuation_history[cutoff_index];
         search.set_position(&played(&board, cutoff), &[]);
         assert_eq!(search.continuation_history[cutoff_index], before_decay / 2);
+    }
+
+    #[test]
+    fn two_ply_continuation_history_rewards_the_followup_reply() {
+        // Same size as the 1-ply table.
+        assert_eq!(
+            CONTINUATION_HISTORY_ENTRIES * std::mem::size_of::<i16>(),
+            288 * 1024
+        );
+
+        let board = Board::default();
+        let prev = "e2e4".parse().unwrap();
+        let cutoff = "g1f3".parse().unwrap();
+        let failed = "b1c3".parse().unwrap();
+        let mut search = SearchCore::new();
+        // Pretend a move was played two plies ago so the ply-2 context is populated.
+        search.conthist_stack[0] = move_base_index(&board, prev);
+
+        search.record_quiet_cutoff(&board, cutoff, 8, 2, None, &[failed, cutoff]);
+
+        let base2 = search.conthist_stack[0].unwrap();
+        let cutoff_index = base2 * PIECE_TO_SQUARE + move_base_index(&board, cutoff).unwrap();
+        let failed_index = base2 * PIECE_TO_SQUARE + move_base_index(&board, failed).unwrap();
+        assert!(search.continuation_history_2[cutoff_index] > 0);
+        assert!(search.continuation_history_2[failed_index] < 0);
+        assert!(search.quiet_history_score(&board, cutoff, None, 2) > 0);
     }
 
     #[test]

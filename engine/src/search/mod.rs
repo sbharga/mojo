@@ -21,7 +21,7 @@ pub(crate) use moves::legal_moves;
 pub(crate) use moves::{fallback, played};
 
 use moves::{captured_value, decode_move, encode_move, is_capture, repetition_key, rule_key};
-use ordering::{MovePicker, QuiescencePicker, RootMovePicker, RootMoveStat};
+use ordering::{MovePicker, QuiescencePicker, RootMovePicker, RootMoveStat, move_base_index};
 use see::static_exchange;
 use tt::{Bound, TT_BUCKETS, TT_ENTRIES, TTBucket, TTEntry, score_from_tt, score_to_tt};
 
@@ -195,9 +195,12 @@ pub(crate) struct SearchCore {
     killers: [[Option<Move>; 2]; MAX_PLY],
     history: [[i32; 64]; 64],
     continuation_history: Box<[i16]>,
+    continuation_history_2: Box<[i16]>,
+    conthist_stack: [Option<usize>; MAX_PLY],
     capture_history: Box<[i16]>,
     pawn_correction: Box<[i16]>,
     material_correction: Box<[i16]>,
+    nonpawn_correction: Box<[i16]>,
     pawn_cache: Box<[pawn_cache::PawnCacheEntry]>,
     static_evals: [i16; MAX_PLY],
     root_stats: ArrayVec<RootMoveStat, MAX_MOVES>,
@@ -249,9 +252,13 @@ impl SearchCore {
             history: [[0; 64]; 64],
             continuation_history: vec![0; ordering::CONTINUATION_HISTORY_ENTRIES]
                 .into_boxed_slice(),
+            continuation_history_2: vec![0; ordering::CONTINUATION_HISTORY_ENTRIES]
+                .into_boxed_slice(),
+            conthist_stack: [None; MAX_PLY],
             capture_history: vec![0; ordering::CAPTURE_HISTORY_ENTRIES].into_boxed_slice(),
             pawn_correction: vec![0; correction::CORRECTION_HISTORY_ENTRIES].into_boxed_slice(),
             material_correction: vec![0; correction::CORRECTION_HISTORY_ENTRIES].into_boxed_slice(),
+            nonpawn_correction: vec![0; correction::CORRECTION_HISTORY_ENTRIES].into_boxed_slice(),
             pawn_cache: pawn_cache::empty_cache(),
             static_evals: [i16::MIN; MAX_PLY],
             root_stats: ArrayVec::new(),
@@ -368,6 +375,9 @@ impl SearchCore {
             for value in &mut self.continuation_history {
                 *value /= 2;
             }
+            for value in &mut self.continuation_history_2 {
+                *value /= 2;
+            }
             for value in &mut self.capture_history {
                 *value /= 2;
             }
@@ -375,6 +385,9 @@ impl SearchCore {
                 *value /= 2;
             }
             for value in &mut self.material_correction {
+                *value /= 2;
+            }
+            for value in &mut self.nonpawn_correction {
                 *value /= 2;
             }
             self.killers = [[None; 2]; MAX_PLY];
@@ -943,6 +956,7 @@ impl SearchCore {
             countermove,
             ordering_threat,
             prev_move,
+            ply,
             excluded_move.as_slice(),
         );
         let mut best_score = -INF;
@@ -963,7 +977,7 @@ impl SearchCore {
             let defends_threat = quiet
                 && threat_move.is_some_and(|threat| defends_against_threat(board, &child, threat));
             let quiet_history = if quiet {
-                self.quiet_history_score(board, mv, prev_move)
+                self.quiet_history_score(board, mv, prev_move, ply)
             } else {
                 0
             };
@@ -1012,6 +1026,11 @@ impl SearchCore {
                 searched_captures.push(mv);
             }
             self.path.push(repetition_key(&child));
+            if ply < MAX_PLY {
+                // Record the move played here so descendants can read it as their
+                // 2-ply-back continuation context (see `continuation2_index`).
+                self.conthist_stack[ply] = move_base_index(board, mv);
+            }
             let singular_extension =
                 i16::from(Some(mv) == singular_move && next_extensions < MAX_CHECK_EXTENSIONS);
             let negative_extension = i16::from(Some(mv) == negative_extension_move);
@@ -1193,17 +1212,20 @@ impl SearchCore {
             .and_then(TTEntry::static_eval)
             .unwrap_or_else(|| self.raw_evaluate(board));
         let stand_pat = self.corrected_static_eval(board, raw_stand_pat);
+        // Fail-soft: track the best score seen so we can return a bound tighter
+        // than beta/alpha. When in check we may not stand pat, so seed with -INF.
+        let mut best_score = if in_check { -INF } else { stand_pat };
         if !in_check {
             if stand_pat >= beta {
                 self.store(
                     key,
                     0,
-                    score_to_tt(beta, ply),
+                    score_to_tt(stand_pat, ply),
                     Bound::Lower,
                     None,
                     Some(raw_stand_pat),
                 );
-                return beta;
+                return stand_pat;
             }
             alpha = alpha.max(stand_pat);
         }
@@ -1231,24 +1253,27 @@ impl SearchCore {
             if self.timed_out {
                 return 0;
             }
-            if score >= beta {
-                self.store(
-                    key,
-                    0,
-                    score_to_tt(beta, ply),
-                    Bound::Lower,
-                    Some(mv),
-                    Some(raw_stand_pat),
-                );
-                return beta;
-            }
-            if score > alpha {
-                alpha = score;
-                best_move = Some(mv);
-                self.update_pv(ply, mv);
+            if score > best_score {
+                best_score = score;
+                if score >= beta {
+                    self.store(
+                        key,
+                        0,
+                        score_to_tt(score, ply),
+                        Bound::Lower,
+                        Some(mv),
+                        Some(raw_stand_pat),
+                    );
+                    return score;
+                }
+                if score > alpha {
+                    alpha = score;
+                    best_move = Some(mv);
+                    self.update_pv(ply, mv);
+                }
             }
         }
-        let bound = if alpha <= original_alpha {
+        let bound = if best_score <= original_alpha {
             Bound::Upper
         } else {
             Bound::Exact
@@ -1256,12 +1281,12 @@ impl SearchCore {
         self.store(
             key,
             0,
-            score_to_tt(alpha, ply),
+            score_to_tt(best_score, ply),
             bound,
             best_move,
             Some(raw_stand_pat),
         );
-        alpha
+        best_score
     }
 
     fn is_draw(&self, board: &Board) -> bool {

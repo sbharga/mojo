@@ -1135,6 +1135,29 @@ pub mod tuning {
         !tactical
     }
 
+    /// Average each PST square with its file mirror to restore the left-right
+    /// symmetry the evaluator relies on. Per-square PST parameters are fit
+    /// independently, so an unbalanced corpus yields a file-asymmetric table
+    /// that breaks `evaluation_is_symmetric_by_color_and_turn`. Only the PST
+    /// blocks are per-square; every other parameter is file-independent.
+    pub fn symmetrize(weights: &mut [f64; PARAMETER_COUNT]) {
+        for start in [MG_PST_START, EG_PST_START] {
+            for piece in 0..6 {
+                for square in 0..64 {
+                    let file = square % 8;
+                    let mirror = square - file + (7 - file);
+                    if square < mirror {
+                        let mean = (weights[start + piece * 64 + square]
+                            + weights[start + piece * 64 + mirror])
+                            / 2.0;
+                        weights[start + piece * 64 + square] = mean;
+                        weights[start + piece * 64 + mirror] = mean;
+                    }
+                }
+            }
+        }
+    }
+
     pub fn generated_source(weights: &[f64; PARAMETER_COUNT], source_hash: u64) -> String {
         let base = base_weights();
         let deltas = std::array::from_fn::<i16, PARAMETER_COUNT, _>(|index| {

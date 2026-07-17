@@ -10,6 +10,7 @@ const CORRECTION_BUCKETS: usize = 1 << 14;
 pub(crate) const CORRECTION_HISTORY_ENTRIES: usize = 2 * CORRECTION_BUCKETS;
 const CORRECTION_SCALE: i32 = 256;
 const CORRECTION_LIMIT: i32 = 32 * CORRECTION_SCALE;
+const CORRECTION_MAX: i32 = 32;
 
 impl SearchCore {
     pub(crate) fn corrected_static_eval(&self, board: &Board, raw_eval: i32) -> i32 {
@@ -17,7 +18,12 @@ impl SearchCore {
         let pawn = i32::from(self.pawn_correction[side * CORRECTION_BUCKETS + pawn_index(board)]);
         let material =
             i32::from(self.material_correction[side * CORRECTION_BUCKETS + material_index(board)]);
-        let correction = ((pawn + material) / (2 * CORRECTION_SCALE)).clamp(-32, 32);
+        let nonpawn =
+            i32::from(self.nonpawn_correction[side * CORRECTION_BUCKETS + nonpawn_index(board)]);
+        // Each source contributes up to CORRECTION_MAX/2 cp (a single table at its
+        // ±CORRECTION_LIMIT); agreeing sources reinforce up to the ±CORRECTION_MAX cap.
+        let correction = ((pawn + material + nonpawn) / (2 * CORRECTION_SCALE))
+            .clamp(-CORRECTION_MAX, CORRECTION_MAX);
         raw_eval + correction
     }
 
@@ -48,12 +54,14 @@ impl SearchCore {
         let side = board.side_to_move() as usize;
         let pawn_index = side * CORRECTION_BUCKETS + pawn_index(board);
         let material_index = side * CORRECTION_BUCKETS + material_index(board);
+        let nonpawn_index = side * CORRECTION_BUCKETS + nonpawn_index(board);
         update_entry(&mut self.pawn_correction[pawn_index], target, weight);
         update_entry(
             &mut self.material_correction[material_index],
             target,
             weight,
         );
+        update_entry(&mut self.nonpawn_correction[nonpawn_index], target, weight);
     }
 }
 
@@ -67,6 +75,19 @@ fn pawn_index(board: &Board) -> usize {
     let white = (board.colored_pieces(Color::White, Piece::Pawn)).0;
     let black = (board.colored_pieces(Color::Black, Piece::Pawn)).0;
     fold_hash(mix(white) ^ mix(black.rotate_left(32)))
+}
+
+fn nonpawn_index(board: &Board) -> usize {
+    // Hash the *placement* of the non-pawn, non-king pieces of both colors so the
+    // residual can key on piece configuration (not just counts as material does).
+    let mut hash = 0_u64;
+    for (i, color) in [Color::White, Color::Black].into_iter().enumerate() {
+        for piece in [Piece::Knight, Piece::Bishop, Piece::Rook, Piece::Queen] {
+            let bits = board.colored_pieces(color, piece).0;
+            hash ^= mix(bits.rotate_left((piece as u32) * 8 + (i as u32) * 4));
+        }
+    }
+    fold_hash(hash)
 }
 
 fn material_index(board: &Board) -> usize {
@@ -106,10 +127,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn correction_tables_use_128_kib_and_learn_a_bounded_residual() {
+    fn correction_tables_use_192_kib_and_learn_a_bounded_residual() {
+        // pawn + material + nonpawn tables.
         assert_eq!(
-            2 * CORRECTION_HISTORY_ENTRIES * std::mem::size_of::<i16>(),
-            128 * 1024
+            3 * CORRECTION_HISTORY_ENTRIES * std::mem::size_of::<i16>(),
+            192 * 1024
         );
         let board = Board::default();
         let mut search = SearchCore::new();
