@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "prepare:stockfish": "node scripts/prepare-stockfish.mjs",
-    "predev": "npm run prepare:stockfish",
-    "prebuild": "npm run prepare:stockfish",
+    "prepare:engine-versions": "node scripts/prepare-engine-versions.mjs",
+    "prepare:assets": "npm run prepare:stockfish && npm run prepare:engine-versions",
+    "predev": "npm run prepare:assets",
+    "prebuild": "npm run prepare:assets",
     "build:engine": "node ../engine/build-wasm.mjs",
     "build:engine:book": "node ../engine/build-wasm.mjs --features book",
     "build:engine:spsa": "cd ../engine && wasm-pack build --target web --out-dir pkg-spsa --release -- --features spsa",
