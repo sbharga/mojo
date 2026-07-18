@@ -9,3 +9,4 @@ engine/pkg-spsa/
 web/node_modules/
 web/dist/
 web/public/stockfish/
+web/public/engine-versions/

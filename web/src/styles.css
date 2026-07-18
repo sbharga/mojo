@@ -393,6 +393,178 @@ button.primary {
   background: #8dbb4e;
   color: #15200e;
 }
+.nav-button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 13px;
+  border: 1px solid #3a3933;
+  border-radius: 8px;
+  color: #d8d7d2;
+  background: #24231f;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.nav-button:hover {
+  color: #f1f1ef;
+  background: #302f2a;
+}
+.compare-app {
+  max-width: 1240px;
+}
+.compare-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.85fr) minmax(520px, 1.5fr);
+  gap: 18px;
+  align-items: stretch;
+}
+.compare-setup,
+.compare-results {
+  min-height: 330px;
+}
+.compare-form {
+  padding: 15px;
+}
+.compare-form label {
+  display: block;
+  margin-bottom: 13px;
+  color: #aaa9a3;
+  font-size: 12px;
+  font-weight: 600;
+}
+.compare-form select,
+.compare-form input[type="number"] {
+  width: 100%;
+  min-height: 39px;
+  margin-top: 6px;
+  padding: 8px 9px;
+  border: 1px solid #45433d;
+  border-radius: 5px;
+  color: #e8e7e3;
+  background: #302f2a;
+}
+.compare-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.compare-actions,
+.export-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.compare-actions {
+  margin-top: 17px;
+}
+.compare-actions button,
+.export-actions button {
+  min-height: 38px;
+  padding: 8px 13px;
+  border: 0;
+  border-radius: 5px;
+  color: #d8d7d2;
+  background: #3b3933;
+  font-size: 12px;
+  font-weight: 700;
+}
+button.danger {
+  color: #f0d7ce;
+  background: #6a3c31;
+}
+.field-error,
+.error-message {
+  margin: 0 0 12px;
+  color: #f0b8a7;
+  font-size: 12px;
+}
+.error-message {
+  padding: 10px 12px;
+  border: 1px solid #70483e;
+  border-radius: 5px;
+  background: #3e2b26;
+}
+.progress-track {
+  height: 7px;
+  overflow: hidden;
+  background: #181713;
+}
+.progress-track span {
+  display: block;
+  height: 100%;
+  background: #9aca5a;
+  transition: width 0.2s ease;
+}
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: #34332e;
+}
+.summary-grid > div {
+  min-height: 102px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 14px 16px;
+  background: #24231f;
+}
+.summary-grid small {
+  color: #8f8e88;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.summary-grid strong {
+  margin-top: 5px;
+  color: #eae9e4;
+  font-size: 21px;
+}
+.summary-grid span {
+  margin-top: 4px;
+  color: #999892;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+}
+.compare-results > .error-message {
+  margin: 13px;
+}
+.export-actions {
+  padding: 14px;
+  border-top: 1px solid #34332e;
+}
+.game-log {
+  margin-top: 18px;
+}
+.game-table-wrap {
+  overflow-x: auto;
+}
+.game-log table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.game-log th,
+.game-log td {
+  padding: 10px 13px;
+  border-bottom: 1px solid #34332e;
+  text-align: left;
+  white-space: nowrap;
+}
+.game-log th {
+  color: #999892;
+  background: #201f1b;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.game-log td {
+  color: #d3d2cc;
+}
+.game-log tbody tr:hover td {
+  background: #292824;
+}
 .control-grid .reset-game {
   grid-column: 1 / -1;
   color: #f0d7ce;
@@ -464,6 +636,13 @@ textarea {
   }
 }
 @media (max-width: 880px) {
+  .compare-layout {
+    grid-template-columns: 1fr;
+  }
+  .compare-setup,
+  .compare-results {
+    min-height: 0;
+  }
   .workspace {
     grid-template-columns: 1fr;
   }
@@ -527,6 +706,31 @@ textarea {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .header-actions {
+    gap: 6px;
+  }
+  .nav-button {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+    padding: 0 9px;
+  }
+  .compare-app .brand__mark {
+    display: none;
+  }
+  .compare-app h1 {
+    font-size: 18px;
+  }
+  .compare-app .status {
+    max-width: 108px;
+  }
+  .compare-fields,
+  .summary-grid {
+    grid-template-columns: 1fr;
+  }
+  .summary-grid > div {
+    min-height: 82px;
   }
   .icon-button,
   .panel__actions button,

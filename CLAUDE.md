@@ -77,3 +77,5 @@ Cargo features gate the offline tooling and optional book: `tuning` (texel bin),
 
 ### UI (`web/src/`)
 `App.tsx` orchestrates game state (`chess.js`) and drives moves across five modes (human-engine, human-stockfish, engine-engine, mojo-stockfish, human-human). `appState.ts` reads/writes settings + session from `localStorage` **defensively** (clamps/validates every field so hand-edited storage can't break the UI). Components in `components/`.
+
+`Root.tsx` hash-routes between the play UI and `#/compare`. The comparison page loads generated historical Wasm builds into dedicated workers, plays deterministic color-swapped opening pairs, and reports/export results without a backend. `scripts/prepare-engine-versions.mjs` requires full Git history and generates its ignored catalog under `web/public/engine-versions/` during dev/build.

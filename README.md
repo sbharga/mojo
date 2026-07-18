@@ -18,6 +18,8 @@ analysis reference.
   picks the faster one the browser supports at runtime.
 - Separate `move` and `analysis` engine instances so background analysis never
   eats into a move's time budget.
+- Browser-local commit comparison with parallel, color-swapped self-play,
+  live SPRT results, and PGN/JSON exports.
 - Five play modes: human vs. engine, human vs. Stockfish, engine vs. engine,
   Mojo vs. Stockfish, and human vs. human.
 - Offline tooling for Texel evaluation tuning, SPSA search-parameter tuning,
@@ -47,6 +49,10 @@ cd web
 npm ci
 npm run dev      # builds the engine Wasm, then starts the Vite dev server
 ```
+
+Development and production builds also prepare the comparison catalog from
+committed historical Wasm artifacts. A full Git history is required to expose
+every compatible engine build.
 
 To produce a production build:
 
