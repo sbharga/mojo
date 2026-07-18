@@ -7,7 +7,7 @@ const requireFromWeb = createRequire(new URL('../web/package.json', import.meta.
 const { Chess } = requireFromWeb('chess.js')
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url))
 
-const defaultOpeningsUrl = new URL('./openings.json', import.meta.url)
+const defaultOpeningsUrl = new URL('./openings-balanced.json', import.meta.url)
 
 const defaults = {
   candidate: './engine/pkg/mojo_engine_bg.wasm',
@@ -41,7 +41,7 @@ Options:
   --depth <plies>          Fixed iterative-search depth (default: 5)
   --move-time-ms <ms>      Equal time per move; overrides fixed depth
   --openings <count>       Limit the number of opening pairs
-  --openings-file <path>   JSON opening suite (default: bundled ECO FEN suite)
+  --openings-file <path>   JSON opening suite (default: Mojo-balanced ECO subset; pass openings.json for the full suite)
   --training-output <path> Write <white result><TAB><FEN> tuning records
   --baseline-params <path> SPSA parameter JSON for the baseline side
   --candidate-params <path> SPSA parameter JSON for the candidate side

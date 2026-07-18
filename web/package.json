@@ -14,6 +14,7 @@
     "build:engine:spsa": "cd ../engine && wasm-pack build --target web --out-dir pkg-spsa --release -- --features spsa",
     "bench:engine": "npm run build:engine && node ../engine/bench.mjs",
     "selfplay": "node ../engine/selfplay.mjs",
+    "openings:balance": "node ../engine/filter-openings.mjs",
     "tune:eval": "cargo run --manifest-path ../engine/Cargo.toml --features tuning --bin texel --",
     "tune:search": "node ../engine/spsa.mjs",
     "test:openings": "node ../engine/validate-openings.mjs",
