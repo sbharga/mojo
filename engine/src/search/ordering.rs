@@ -59,7 +59,7 @@ impl RootMovePicker {
                 } else if is_capture(board, mv) || mv.promotion.is_some() {
                     tactical_score(board, mv, search)
                 } else {
-                    search.history[mv.from as usize][mv.to as usize]
+                    search.history[board.side_to_move() as usize][mv.from as usize][mv.to as usize]
                 };
                 RootCandidate {
                     mv,
@@ -287,7 +287,8 @@ impl QuiescencePicker {
                     if ply < MAX_PLY && search.killers[ply].contains(&Some(mv)) {
                         900_000
                     } else {
-                        search.history[mv.from as usize][mv.to as usize]
+                        search.history[board.side_to_move() as usize][mv.from as usize]
+                            [mv.to as usize]
                     }
                 } else {
                     tactical_score_with_see(board, mv, see, search.capture_history_score(board, mv))
@@ -384,7 +385,8 @@ impl SearchCore {
         prev_move: Option<Move>,
         ply: usize,
     ) -> i32 {
-        let mut score = self.history[mv.from as usize][mv.to as usize]
+        let mut score = self.history[board.side_to_move() as usize][mv.from as usize]
+            [mv.to as usize]
             + continuation_index(board, prev_move, mv)
                 .map_or(0, |index| i32::from(self.continuation_history[index]));
         if let Some(index) = self.continuation2_index(board, mv, ply) {
@@ -434,7 +436,10 @@ impl SearchCore {
         ply: usize,
         bonus: i32,
     ) {
-        update_history(&mut self.history[mv.from as usize][mv.to as usize], bonus);
+        update_history(
+            &mut self.history[board.side_to_move() as usize][mv.from as usize][mv.to as usize],
+            bonus,
+        );
         if let Some(index) = continuation_index(board, prev_move, mv) {
             update_continuation(&mut self.continuation_history[index], bonus);
         }
