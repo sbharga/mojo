@@ -33,8 +33,9 @@ be called out explicitly rather than silently favoring one axis.
 
 The release profile is tuned for size and determinism: `codegen-units = 1`,
 `lto = "fat"`, `panic = "abort"`, `strip = true`, plus a `wasm-opt` pass
-(`-O`, bulk-memory, nontrapping float-to-int, SIMD, strip producers/target
-features).
+(`-O3`, bulk-memory, nontrapping float-to-int, SIMD, strip producers/target
+features). `-O3` was measured node-identical to `-O`/`-Oz` at fixed depth,
+~2% faster wall-clock, and no larger gzipped (data segments dominate size).
 
 Cargo features gate all optional/offline surface area:
 
@@ -133,7 +134,8 @@ strength decision that must be validated with the self-play/SPRT harness.
 Survives across depths and adjacent positions:
 - **Transposition table** — `Box<[TTBucket]>`, 2 MiB, 4-way buckets.
 - **Killers** — two per ply.
-- **History** — main `[64][64]` butterfly history.
+- **History** — main butterfly history, `[2][64][64]` indexed by side to move
+  so one color's quiet-move credit cannot pollute the other's ordering.
 - **Continuation history** — piece-to/piece-to indexed (`288 KiB`).
 - **Capture history** — `12×64×6` indexed (`9 KiB`).
 - **Correction history** — pawn + material tables (`128 KiB` combined).
@@ -350,10 +352,21 @@ Terms, all individually tunable via the generated delta table:
   reduced by the pawn shield.
 - **Threats** — pawn threats, minor-on-major threats, and hanging (undefended
   attacked) pieces, each with mid/endgame weights.
-- **Pawn structure** — doubled and isolated penalties; passed-pawn bonuses by
-  relative rank, plus an endgame king-distance term (own king escorts /
-  enemy king races).
-- **Piece-specific** — bishop pair, rook on open/semi-open file.
+- **Pawn structure** — doubled, isolated, and backward penalties; connected
+  (supported/phalanx) bonus by relative rank; passed-pawn bonuses by relative
+  rank with a protected-passer bonus, plus an endgame king-distance term (own
+  king escorts / enemy king races).
+- **Piece-specific** — bishop pair, rook on open/semi-open file, rook on the
+  7th (enemy king on 8th or enemy pawns on 7th), rook behind own passer, and
+  knight/bishop outposts (pawn-defended minors on relative ranks 4-6 that no
+  enemy pawn advance can ever attack).
+- **King attack extras** — pawn-storm bonus for own pawns near the enemy king
+  (midgame-only, by advancement), and safe-check units (knight/bishop/rook/
+  queen checking squares that are unoccupied and undefended) feeding the
+  king-danger curve as structural constants.
+- **Drawish-ending scaling** — pure opposite-colored-bishop endings scale the
+  tapered score by 1/2, folded into the same rule-scale path as fifty-move
+  damping.
 - **Bare-king mating guidance** — when one side has only a king, rewards
   driving the enemy king to an edge (and, for bishop+knight, to the correct-
   colored corner), plus rook/queen "confinement" boxing and attacking-king
@@ -372,7 +385,10 @@ same-colored bishops) while correctly *not* declaring opposite-colored bishops
 or two-knight positions dead.
 
 ### `tuning` submodule (feature `tuning`)
-Exposes the evaluation as **855 linear parameters** for Texel tuning.
+Exposes the evaluation as **887 linear parameters** for Texel tuning.
+`MATERIAL_ANCHOR` marks the MG/EG piece-value block that the texel binary
+hard-freezes during fitting (search margins are calibrated to the base
+centipawn scale, so a fit must not re-scale material).
 `extract` produces `LinearFeatures` (separate mg/eg/direct coefficient vectors
 + phase, perspective, rule scale, offset, forced-draw flag) that reproduce the
 production integer eval **exactly** (asserted by test) while also supporting
@@ -386,7 +402,7 @@ promotion for the training set.
 
 ## 10. Tuned parameters (`src/eval_tuned.rs`)
 
-Generated file holding `SOURCE_HASH` and `DELTAS: [i16; 855]`. The checked-in
+Generated file holding `SOURCE_HASH` and `DELTAS: [i16; 887]`. The checked-in
 version is **all zeros**, deliberately preserving the documented base evaluator
 until a licensed training corpus is fitted and validated. `eval::tuned(base,
 i)` adds `DELTAS[i]` to each base weight at `const` evaluation time, so with
@@ -540,10 +556,15 @@ what does not, and the invariants any change must preserve.
 | Capture history | 9 KiB | 12·64·6 × i16 |
 | KPK bitbase | 24 KiB | computed at init, not embedded |
 | LMR table | 2 KiB | 32×64 u8, `const fn` built |
-| Killers / static evals / PV | small | bounded by `MAX_PLY = 64` |
+| Killers / static evals / PV | small | bounded by `MAX_PLY = 128` |
 | **Wasm gzip budget** | **≤ 230 KB** | enforced for baseline *and* SIMD in `validate-size.mjs` |
 
-`MAX_PLY = 64`, `MAX_MOVES = 218`, `MATE_SCORE = 30_000`, `INF = 32_000`.
+`MAX_PLY = 128`, `MAX_MOVES = 218`, `MATE_SCORE = 30_000`, `INF = 32_000`.
+
+The current node's repetition key is reused from the search-path stack
+(`node_repetition_key`) rather than rehashed, and the TT `rule_key` is derived
+from it (`rule_key_from`); a debug assertion checks the stack key against a
+fresh computation.
 
 ### Search tuning constants (current frozen values)
 
@@ -564,15 +585,16 @@ Only **6** of these are exposed to SPSA (aspiration delta, RFP, futility
 base/per-ply, probcut, delta pruning) — the rest are hardcoded and only
 tunable by editing constants + rerunning self-play.
 
-### Evaluation term inventory (855 tunable parameters)
+### Evaluation term inventory (887 tunable parameters)
 
 Material (12), PSTs (768 = 6×64×2), doubled/isolated pawns, bishop pair, rook
 open/semi-open, tempo, mop-up (edge/king/rook-confinement/BN-corner), 4 mobility
 weights, a 32-entry king-attack curve, passed-pawn tables (mid/eg by rank +
-own/enemy king distance), and 3 threat categories (pawn / minor-on-major /
-hanging). **The checked-in delta table is all zeros** — the evaluation has
-never been Texel-tuned on a corpus; it runs on the hand-authored PeSTO-derived
-base weights.
+own/enemy king distance), 3 threat categories (pawn / minor-on-major /
+hanging), connected-pawn tables (mid/eg by rank), backward-pawn and
+protected-passer terms, rook behind passer, rook on 7th, knight/bishop
+outposts, and a 4-stage pawn-storm table (mg-only). Safe-check units and the
+OCB ending scale are structural constants, not tunable parameters.
 
 ### What is currently absent
 
@@ -580,9 +602,10 @@ base weights.
 - **No SMP / multithreading inside the engine** — single-threaded search; the
   web layer runs two *separate* engines (move + analysis), not a shared
   parallel search. (`no unsafe` + Wasm single-thread model constrain this.)
-- **No incremental Zobrist / eval** — `repetition_key`/`rule_key` and the full
-  static eval are recomputed per node rather than updated incrementally on
-  make/unmake (the code clones boards via `played` rather than make/unmake).
+- **No incremental Zobrist / eval** — the full static eval is recomputed per
+  node rather than updated incrementally on make/unmake (the code clones
+  boards via `played`). The repetition/rule keys, however, are reused from the
+  search-path stack instead of rehashed.
 - **No syzygy / larger endgame tablebases** — only the compute-at-init KPK
   bitbase exists; KRK, KQK, KBNK etc. rely on the handcrafted mop-up terms.
 - **No pondering, no explicit repetition-aware contempt, no dynamic contempt.**
