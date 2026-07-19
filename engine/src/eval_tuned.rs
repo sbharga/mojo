@@ -4,4 +4,4 @@
 
 #[cfg_attr(not(feature = "tuning"), allow(dead_code))]
 pub(crate) const SOURCE_HASH: u64 = 0;
-pub(crate) const DELTAS: [i16; 855] = [0; 855];
+pub(crate) const DELTAS: [i16; 879] = [0; 879];

@@ -6,7 +6,7 @@ use cozy_chess::{
 use crate::eval_tuned::DELTAS;
 
 #[cfg(feature = "tuning")]
-pub(crate) const PARAMETER_COUNT: usize = 855;
+pub(crate) const PARAMETER_COUNT: usize = 879;
 const MG_VALUE_START: usize = 0;
 const EG_VALUE_START: usize = 6;
 const MG_PST_START: usize = 12;
@@ -39,6 +39,16 @@ const MINOR_MAJOR_THREAT_MG: usize = 851;
 const MINOR_MAJOR_THREAT_EG: usize = 852;
 const HANGING_THREAT_MG: usize = 853;
 const HANGING_THREAT_EG: usize = 854;
+const CONNECTED_MG_START: usize = 855;
+const CONNECTED_EG_START: usize = 863;
+const BACKWARD_MG: usize = 871;
+const BACKWARD_EG: usize = 872;
+const PROTECTED_PASSER_MG: usize = 873;
+const PROTECTED_PASSER_EG: usize = 874;
+const ROOK_BEHIND_PASSER_MG: usize = 875;
+const ROOK_BEHIND_PASSER_EG: usize = 876;
+const ROOK_ON_SEVENTH_MG: usize = 877;
+const ROOK_ON_SEVENTH_EG: usize = 878;
 
 const fn tuned(base: i32, parameter: usize) -> i32 {
     base + DELTAS[parameter] as i32
@@ -104,6 +114,18 @@ const EG_PASSER: [i32; 8] = [0, 10, 20, 40, 70, 120, 200, 0];
 // attacking king being close, the classic "king escorts / king races" rule.
 const PASSER_OWN_KING_DIST_WEIGHT_EG: i32 = 5;
 const PASSER_ENEMY_KING_DIST_WEIGHT_EG: i32 = 10;
+// Connected (supported or phalanx) pawn bonus by rank relative to the pawn's
+// own side; back rank and promotion rank are structurally impossible/unused.
+const CONNECTED_PAWN_BONUS_MG: [i32; 8] = [0, 1, 3, 5, 9, 18, 35, 0];
+const CONNECTED_PAWN_BONUS_EG: [i32; 8] = [0, 2, 4, 7, 14, 30, 55, 0];
+const BACKWARD_PAWN_PENALTY_MG: i32 = 8;
+const BACKWARD_PAWN_PENALTY_EG: i32 = 12;
+const PROTECTED_PASSER_BONUS_MG: i32 = 10;
+const PROTECTED_PASSER_BONUS_EG: i32 = 20;
+const ROOK_BEHIND_PASSER_BONUS_MG: i32 = 5;
+const ROOK_BEHIND_PASSER_BONUS_EG: i32 = 20;
+const ROOK_ON_SEVENTH_BONUS_MG: i32 = 20;
+const ROOK_ON_SEVENTH_BONUS_EG: i32 = 30;
 const PAWN_THREAT_BONUS_MG: i32 = 12;
 const PAWN_THREAT_BONUS_EG: i32 = 18;
 const MINOR_MAJOR_THREAT_BONUS_MG: i32 = 16;
@@ -212,6 +234,7 @@ pub(crate) fn pawn_structure(board: &Board) -> PawnStructure {
         let sign = if color == Color::White { 1 } else { -1 };
         let pawns = board.colored_pieces(color, Piece::Pawn);
         let enemy_pawns = board.colored_pieces(!color, Piece::Pawn);
+        let own_attacks = pawn_attack_bits(pawns.0, color);
         let mut file_counts = [0_i32; 8];
         for pawn in pawns {
             file_counts[pawn.file() as usize] += 1;
@@ -226,6 +249,30 @@ pub(crate) fn pawn_structure(board: &Board) -> PawnStructure {
                     );
             }
         }
+        for pawn in connected_pawns(pawns, color) {
+            let relative_rank = if color == Color::White {
+                pawn.rank() as usize
+            } else {
+                7 - pawn.rank() as usize
+            };
+            structure.score += sign
+                * pack(
+                    tuned(
+                        CONNECTED_PAWN_BONUS_MG[relative_rank],
+                        CONNECTED_MG_START + relative_rank,
+                    ),
+                    tuned(
+                        CONNECTED_PAWN_BONUS_EG[relative_rank],
+                        CONNECTED_EG_START + relative_rank,
+                    ),
+                );
+        }
+        structure.score -= sign
+            * backward_pawns(pawns, enemy_pawns, color).len() as i32
+            * pack(
+                tuned(BACKWARD_PAWN_PENALTY_MG, BACKWARD_MG),
+                tuned(BACKWARD_PAWN_PENALTY_EG, BACKWARD_EG),
+            );
         for pawn in pawns {
             let file = pawn.file() as i32;
             let rank = pawn.rank() as i32;
@@ -259,6 +306,13 @@ pub(crate) fn pawn_structure(board: &Board) -> PawnStructure {
                         tuned(MG_PASSER[relative_rank], MG_PASSER_START + relative_rank),
                         tuned(EG_PASSER[relative_rank], EG_PASSER_START + relative_rank),
                     );
+                if own_attacks & pawn.bitboard().0 != 0 {
+                    structure.score += sign
+                        * pack(
+                            tuned(PROTECTED_PASSER_BONUS_MG, PROTECTED_PASSER_MG),
+                            tuned(PROTECTED_PASSER_BONUS_EG, PROTECTED_PASSER_EG),
+                        );
+                }
             }
         }
     }
@@ -405,6 +459,8 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
                     tuned(BISHOP_PAIR_BONUS_EG, BISHOP_PAIR_EG),
                 );
         }
+        let seventh = Rank::Seventh.relative_to(color);
+        let eighth = Rank::Eighth.relative_to(color);
         for rook in board.colored_pieces(color, Piece::Rook) {
             let file = rook.file() as usize;
             if file_counts[file] == 0 {
@@ -423,6 +479,33 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
                             tuned(ROOK_OPEN_FILE_BONUS_EG, ROOK_OPEN_EG),
                         )
                     };
+            }
+            if rook.rank() == seventh
+                && (board.king(!color).rank() == eighth
+                    || !(enemy_pawns & seventh.bitboard()).is_empty())
+            {
+                score += sign
+                    * pack(
+                        tuned(ROOK_ON_SEVENTH_BONUS_MG, ROOK_ON_SEVENTH_MG),
+                        tuned(ROOK_ON_SEVENTH_BONUS_EG, ROOK_ON_SEVENTH_EG),
+                    );
+            }
+            let behind_passer = pawn_structure.passers[color as usize]
+                .into_iter()
+                .any(|passer| {
+                    passer.file() == rook.file()
+                        && if color == Color::White {
+                            rook.rank() < passer.rank()
+                        } else {
+                            rook.rank() > passer.rank()
+                        }
+                });
+            if behind_passer {
+                score += sign
+                    * pack(
+                        tuned(ROOK_BEHIND_PASSER_BONUS_MG, ROOK_BEHIND_PASSER_MG),
+                        tuned(ROOK_BEHIND_PASSER_BONUS_EG, ROOK_BEHIND_PASSER_EG),
+                    );
             }
         }
     }
@@ -477,6 +560,69 @@ fn pawn_attacks(board: &Board, color: Color) -> BitBoard {
         .fold(BitBoard::EMPTY, |attacks, pawn| {
             attacks | get_pawn_attacks(pawn, color)
         })
+}
+
+const FILE_A_BITS: u64 = 0x0101_0101_0101_0101;
+const FILE_H_BITS: u64 = FILE_A_BITS << 7;
+
+fn east_one(bits: u64) -> u64 {
+    (bits << 1) & !FILE_A_BITS
+}
+
+fn west_one(bits: u64) -> u64 {
+    (bits >> 1) & !FILE_H_BITS
+}
+
+fn north_fill(mut bits: u64) -> u64 {
+    bits |= bits << 8;
+    bits |= bits << 16;
+    bits |= bits << 32;
+    bits
+}
+
+fn south_fill(mut bits: u64) -> u64 {
+    bits |= bits >> 8;
+    bits |= bits >> 16;
+    bits |= bits >> 32;
+    bits
+}
+
+/// All squares attacked by `pawns` of `color` (both capture directions).
+fn pawn_attack_bits(pawns: u64, color: Color) -> u64 {
+    let sides = east_one(pawns) | west_one(pawns);
+    match color {
+        Color::White => sides << 8,
+        Color::Black => sides >> 8,
+    }
+}
+
+/// Pawns that are defended by an own pawn or have a same-rank neighbor.
+fn connected_pawns(pawns: BitBoard, color: Color) -> BitBoard {
+    let own = pawns.0;
+    let phalanx = own & (east_one(own) | west_one(own));
+    let supported = own & pawn_attack_bits(own, color);
+    BitBoard(phalanx | supported)
+}
+
+/// Pawns whose stop square is controlled by an enemy pawn while every own
+/// pawn on an adjacent file is already ahead of them (so they can never be
+/// defended as they advance). Isolated pawns are excluded — they carry their
+/// own penalty.
+fn backward_pawns(pawns: BitBoard, enemy_pawns: BitBoard, color: Color) -> BitBoard {
+    let own = pawns.0;
+    let neighbors = east_one(own) | west_one(own);
+    let has_neighbor = north_fill(neighbors) | south_fill(neighbors);
+    let (support_span, stop_attacked) = match color {
+        Color::White => (
+            north_fill(neighbors),
+            pawn_attack_bits(enemy_pawns.0, Color::Black) >> 8,
+        ),
+        Color::Black => (
+            south_fill(neighbors),
+            pawn_attack_bits(enemy_pawns.0, Color::White) << 8,
+        ),
+    };
+    BitBoard(own & has_neighbor & !support_span & stop_attacked)
 }
 
 fn king_shield_pawns(board: &Board, color: Color) -> i32 {
@@ -636,6 +782,27 @@ mod evaluation_tests {
             std::mem::size_of_val(&PACKED_PST),
             std::mem::size_of_val(&MG_PST) + std::mem::size_of_val(&EG_PST)
         );
+    }
+
+    #[test]
+    fn connected_and_backward_pawns_are_classified_by_structure() {
+        // White: e4 (supported by d3), d3 (backward: stop d4 is controlled by
+        // the e5 pawn and its only neighbor e4 is already ahead).
+        // Black: d5/e5 phalanx; neither is backward because each supports the
+        // other's advance from the same rank.
+        let board: Board = "4k3/8/8/3pp3/4P3/3P4/8/4K3 w - - 0 1".parse().unwrap();
+        let white = board.colored_pieces(Color::White, Piece::Pawn);
+        let black = board.colored_pieces(Color::Black, Piece::Pawn);
+        assert_eq!(connected_pawns(white, Color::White), Square::E4.bitboard());
+        assert_eq!(
+            backward_pawns(white, black, Color::White),
+            Square::D3.bitboard()
+        );
+        assert_eq!(
+            connected_pawns(black, Color::Black),
+            Square::D5.bitboard() | Square::E5.bitboard()
+        );
+        assert_eq!(backward_pawns(black, white, Color::Black), BitBoard::EMPTY);
     }
 
     #[test]
@@ -829,6 +996,16 @@ pub mod tuning {
         weights[MINOR_MAJOR_THREAT_EG] = MINOR_MAJOR_THREAT_BONUS_EG;
         weights[HANGING_THREAT_MG] = HANGING_THREAT_BONUS_MG;
         weights[HANGING_THREAT_EG] = HANGING_THREAT_BONUS_EG;
+        weights[CONNECTED_MG_START..CONNECTED_EG_START].copy_from_slice(&CONNECTED_PAWN_BONUS_MG);
+        weights[CONNECTED_EG_START..BACKWARD_MG].copy_from_slice(&CONNECTED_PAWN_BONUS_EG);
+        weights[BACKWARD_MG] = BACKWARD_PAWN_PENALTY_MG;
+        weights[BACKWARD_EG] = BACKWARD_PAWN_PENALTY_EG;
+        weights[PROTECTED_PASSER_MG] = PROTECTED_PASSER_BONUS_MG;
+        weights[PROTECTED_PASSER_EG] = PROTECTED_PASSER_BONUS_EG;
+        weights[ROOK_BEHIND_PASSER_MG] = ROOK_BEHIND_PASSER_BONUS_MG;
+        weights[ROOK_BEHIND_PASSER_EG] = ROOK_BEHIND_PASSER_BONUS_EG;
+        weights[ROOK_ON_SEVENTH_MG] = ROOK_ON_SEVENTH_BONUS_MG;
+        weights[ROOK_ON_SEVENTH_EG] = ROOK_ON_SEVENTH_BONUS_EG;
         weights
     }
 
@@ -986,6 +1163,7 @@ pub mod tuning {
         let sign = color_sign(color);
         let pawns = board.colored_pieces(color, Piece::Pawn);
         let enemy_pawns = board.colored_pieces(!color, Piece::Pawn);
+        let own_attacks = super::pawn_attack_bits(pawns.0, color);
         let mut file_counts = [0_i32; 8];
         for pawn in pawns {
             file_counts[pawn.file() as usize] += 1;
@@ -996,6 +1174,19 @@ pub mod tuning {
                 eg[DOUBLED_EG] -= sign * (count - 1);
             }
         }
+        for pawn in super::connected_pawns(pawns, color) {
+            let relative_rank = if color == Color::White {
+                pawn.rank() as usize
+            } else {
+                7 - pawn.rank() as usize
+            };
+            mg[CONNECTED_MG_START + relative_rank] += sign;
+            eg[CONNECTED_EG_START + relative_rank] += sign;
+        }
+        let backward = super::backward_pawns(pawns, enemy_pawns, color).len() as i32;
+        mg[BACKWARD_MG] -= sign * backward;
+        eg[BACKWARD_EG] -= sign * backward;
+        let mut passers = BitBoard::EMPTY;
         for pawn in pawns {
             let file = pawn.file() as i32;
             let rank = pawn.rank() as i32;
@@ -1015,6 +1206,7 @@ pub mod tuning {
                 !(close_file && ahead)
             });
             if passed {
+                passers |= pawn.bitboard();
                 let relative_rank = if color == Color::White {
                     rank
                 } else {
@@ -1024,12 +1216,18 @@ pub mod tuning {
                 eg[EG_PASSER_START + relative_rank] += sign;
                 eg[PASSER_ENEMY_KING] += sign * chebyshev_distance(board.king(!color), pawn);
                 eg[PASSER_OWN_KING] -= sign * chebyshev_distance(board.king(color), pawn);
+                if own_attacks & pawn.bitboard().0 != 0 {
+                    mg[PROTECTED_PASSER_MG] += sign;
+                    eg[PROTECTED_PASSER_EG] += sign;
+                }
             }
         }
         if board.colored_pieces(color, Piece::Bishop).len() >= 2 {
             mg[BISHOP_PAIR_MG] += sign;
             eg[BISHOP_PAIR_EG] += sign;
         }
+        let seventh = Rank::Seventh.relative_to(color);
+        let eighth = Rank::Eighth.relative_to(color);
         for rook in board.colored_pieces(color, Piece::Rook) {
             let file = rook.file() as usize;
             if file_counts[file] == 0 {
@@ -1043,6 +1241,25 @@ pub mod tuning {
                     mg[ROOK_OPEN_MG] += sign;
                     eg[ROOK_OPEN_EG] += sign;
                 }
+            }
+            if rook.rank() == seventh
+                && (board.king(!color).rank() == eighth
+                    || !(enemy_pawns & seventh.bitboard()).is_empty())
+            {
+                mg[ROOK_ON_SEVENTH_MG] += sign;
+                eg[ROOK_ON_SEVENTH_EG] += sign;
+            }
+            let behind_passer = passers.into_iter().any(|passer| {
+                passer.file() == rook.file()
+                    && if color == Color::White {
+                        rook.rank() < passer.rank()
+                    } else {
+                        rook.rank() > passer.rank()
+                    }
+            });
+            if behind_passer {
+                mg[ROOK_BEHIND_PASSER_MG] += sign;
+                eg[ROOK_BEHIND_PASSER_EG] += sign;
             }
         }
     }
@@ -1196,6 +1413,7 @@ pub mod tuning {
                 "startpos",
                 "r3k2r/ppp2ppp/2n1bn2/3qp3/3P4/2N1PN2/PPP1BPPP/R2QK2R w KQkq - 4 10",
                 "8/2p2pk1/1p1p2p1/p2P3p/P1P1P3/1P3K2/5PP1/8 b - - 0 35",
+                "6k1/R4ppp/8/1P6/8/8/1R3PPP/6K1 w - - 0 1",
                 "7k/8/8/8/8/8/R7/6K1 w - - 0 1",
                 "7k/8/8/8/8/8/4N3/2B3K1 w - - 0 1",
                 "8/kPK5/8/8/8/8/8/8 w - - 0 1",
