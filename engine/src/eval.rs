@@ -1644,7 +1644,19 @@ pub mod tuning {
         fn generated_source_has_all_parameters() {
             let source = generated_source(&current_weights(), 42);
             assert!(source.contains("SOURCE_HASH: u64 = 0x000000000000002a"));
-            assert_eq!(source.matches("0, ").count(), PARAMETER_COUNT);
+            // Every parameter emits exactly one "<delta>, " cell, regardless of
+            // whether the checked-in deltas are zero or a real fit.
+            let array = source.split_once("= [").unwrap().1;
+            assert_eq!(array.matches(", ").count(), PARAMETER_COUNT);
+            // A generated-from-current source must reproduce the checked-in
+            // deltas exactly (current - base == DELTAS).
+            for (index, delta) in DELTAS.iter().enumerate() {
+                assert_eq!(
+                    current_weights()[index] - base_weights()[index],
+                    f64::from(*delta),
+                    "{index}"
+                );
+            }
         }
     }
 }
