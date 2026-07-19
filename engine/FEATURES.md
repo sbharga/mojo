@@ -596,6 +596,15 @@ protected-passer terms, rook behind passer, rook on 7th, knight/bishop
 outposts, and a 4-stage pawn-storm table (mg-only). Safe-check units and the
 OCB ending scale are structural constants, not tunable parameters.
 
+**The checked-in delta table remains all zeros — deliberately.** Anchored
+Texel fits on the engine's own self-play data (22k and 43k unique quiet
+positions, material frozen, 2026-07-19) both improved held-out logloss
+slightly yet regressed ~45-65 Elo in SPRT: logloss against self-play labels is
+misaligned with playing strength here even at small delta magnitudes. A future
+retune needs an externally labeled corpus. SPSA over the six exposed margins
+(same date) converged back to the frozen constants — they are at a local
+optimum at SPSA's resolution.
+
 ### What is currently absent
 
 - **No NNUE / no neural eval** — evaluation is entirely handcrafted and linear.
