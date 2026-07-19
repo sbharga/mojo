@@ -7,8 +7,8 @@ use std::{
 
 use cozy_chess::{Board, Color};
 use mojo_engine::tuning::{
-    PARAMETER_COUNT, current_weights, extract, generated_source, is_quiet, symmetrize,
-    tuned_source_hash,
+    MATERIAL_ANCHOR, PARAMETER_COUNT, current_weights, extract, generated_source, is_quiet,
+    symmetrize, tuned_source_hash,
 };
 
 const DEFAULT_EPOCHS: usize = 100;
@@ -87,6 +87,7 @@ fn run() -> Result<(), String> {
             let regularization = options.l2 * (weights[index] - initial[index]);
             weights[index] -= options.learning_rate * (gradient[index] / count + regularization);
         }
+        anchor_material(&mut weights, &initial);
         if epoch == 0 || (epoch + 1) % 10 == 0 || epoch + 1 == options.epochs {
             let validation_loss = mean_loss(
                 samples.iter().filter(|sample| sample.validation),
@@ -112,6 +113,7 @@ fn run() -> Result<(), String> {
     // The evaluator is left-right symmetric; restore that invariant on the
     // independently-fit per-square PST parameters before emitting the deltas.
     symmetrize(&mut weights);
+    anchor_material(&mut weights, &initial);
 
     write_atomically(
         &options.output,
@@ -244,6 +246,13 @@ fn load_samples(bytes: &[u8]) -> Result<(Vec<Sample>, usize, usize), String> {
     Ok((samples, parsed, quiet))
 }
 
+/// Hard-freeze the tapered piece values at their starting scale. The search's
+/// pruning margins assume the base centipawn scale; a fit that re-scales
+/// material breaks them even when its held-out loss improves.
+fn anchor_material(weights: &mut [f64; PARAMETER_COUNT], initial: &[f64; PARAMETER_COUNT]) {
+    weights[MATERIAL_ANCHOR].copy_from_slice(&initial[MATERIAL_ANCHOR]);
+}
+
 fn mean_loss<'a>(
     samples: impl Iterator<Item = &'a Sample>,
     weights: &[f64; PARAMETER_COUNT],
@@ -321,6 +330,24 @@ mod tests {
         let (samples, parsed, quiet) = load_samples(input.as_bytes()).unwrap();
         assert_eq!((parsed, quiet, samples.len()), (1, 1, 1));
         assert_eq!(samples[0].result, 0.0);
+    }
+
+    #[test]
+    fn material_values_stay_bit_identical_through_updates() {
+        let initial = current_weights();
+        let mut weights = initial;
+        for value in weights.iter_mut() {
+            *value += 17.5;
+        }
+        anchor_material(&mut weights, &initial);
+        assert_eq!(weights[MATERIAL_ANCHOR], initial[MATERIAL_ANCHOR]);
+        assert!(
+            weights
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !MATERIAL_ANCHOR.contains(index))
+                .all(|(index, &value)| value == initial[index] + 17.5)
+        );
     }
 
     #[test]
