@@ -6,7 +6,7 @@ use cozy_chess::{
 use crate::eval_tuned::DELTAS;
 
 #[cfg(feature = "tuning")]
-pub(crate) const PARAMETER_COUNT: usize = 879;
+pub(crate) const PARAMETER_COUNT: usize = 887;
 const MG_VALUE_START: usize = 0;
 const EG_VALUE_START: usize = 6;
 const MG_PST_START: usize = 12;
@@ -49,6 +49,12 @@ const ROOK_BEHIND_PASSER_MG: usize = 875;
 const ROOK_BEHIND_PASSER_EG: usize = 876;
 const ROOK_ON_SEVENTH_MG: usize = 877;
 const ROOK_ON_SEVENTH_EG: usize = 878;
+const KNIGHT_OUTPOST_MG: usize = 879;
+const KNIGHT_OUTPOST_EG: usize = 880;
+const BISHOP_OUTPOST_MG: usize = 881;
+const BISHOP_OUTPOST_EG: usize = 882;
+const STORM_MG_START: usize = 883;
+const STORM_LEN: usize = 4;
 
 const fn tuned(base: i32, parameter: usize) -> i32 {
     base + DELTAS[parameter] as i32
@@ -126,6 +132,25 @@ const ROOK_BEHIND_PASSER_BONUS_MG: i32 = 5;
 const ROOK_BEHIND_PASSER_BONUS_EG: i32 = 20;
 const ROOK_ON_SEVENTH_BONUS_MG: i32 = 20;
 const ROOK_ON_SEVENTH_BONUS_EG: i32 = 30;
+// A minor on a pawn-defended square in enemy territory that no enemy pawn can
+// ever evict.
+const KNIGHT_OUTPOST_BONUS_MG: i32 = 25;
+const KNIGHT_OUTPOST_BONUS_EG: i32 = 15;
+const BISHOP_OUTPOST_BONUS_MG: i32 = 18;
+const BISHOP_OUTPOST_BONUS_EG: i32 = 10;
+// Own pawns storming the enemy king's file (+/- one file), indexed by how far
+// the pawn has advanced (relative ranks 2..5+); midgame-only by design.
+const PAWN_STORM_BONUS_MG: [i32; STORM_LEN] = [2, 6, 12, 20];
+// Structural safe-check units folded into the king-danger curve input, by
+// checking piece type (knight/bishop/rook/queen). Not individually tunable:
+// the curve itself is the tunable surface.
+const SAFE_CHECK_KNIGHT_UNITS: i32 = 3;
+const SAFE_CHECK_BISHOP_UNITS: i32 = 2;
+const SAFE_CHECK_ROOK_UNITS: i32 = 4;
+const SAFE_CHECK_QUEEN_UNITS: i32 = 5;
+// Pure opposite-colored-bishop endings are notoriously drawish: scale the
+// whole tapered score down (256 = no scaling).
+const OCB_ENDING_SCALE: i32 = 128;
 const PAWN_THREAT_BONUS_MG: i32 = 12;
 const PAWN_THREAT_BONUS_EG: i32 = 18;
 const MINOR_MAJOR_THREAT_BONUS_MG: i32 = 16;
@@ -416,6 +441,7 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
             king_attackers[color as usize],
             undefended_zone,
             shield,
+            safe_check_units(board, color, all_attacks[!color as usize]),
         );
         score += sign
             * pack(
@@ -440,6 +466,35 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
         let mut file_counts = [0_i32; 8];
         for pawn in pawns {
             file_counts[pawn.file() as usize] += 1;
+        }
+        let outposts = outpost_squares(pawns, enemy_pawns, color);
+        let knight_outposts = (board.colored_pieces(color, Piece::Knight) & outposts).len() as i32;
+        let bishop_outposts = (board.colored_pieces(color, Piece::Bishop) & outposts).len() as i32;
+        score += sign
+            * (knight_outposts
+                * pack(
+                    tuned(KNIGHT_OUTPOST_BONUS_MG, KNIGHT_OUTPOST_MG),
+                    tuned(KNIGHT_OUTPOST_BONUS_EG, KNIGHT_OUTPOST_EG),
+                )
+                + bishop_outposts
+                    * pack(
+                        tuned(BISHOP_OUTPOST_BONUS_MG, BISHOP_OUTPOST_MG),
+                        tuned(BISHOP_OUTPOST_BONUS_EG, BISHOP_OUTPOST_EG),
+                    ));
+        let enemy_king_file = board.king(!color).file() as i32;
+        for pawn in pawns {
+            if (pawn.file() as i32 - enemy_king_file).abs() > 1 {
+                continue;
+            }
+            let relative_rank = if color == Color::White {
+                pawn.rank() as usize
+            } else {
+                7 - pawn.rank() as usize
+            };
+            if let Some(stage) = relative_rank.checked_sub(2) {
+                let stage = stage.min(STORM_LEN - 1);
+                score += sign * pack(tuned(PAWN_STORM_BONUS_MG[stage], STORM_MG_START + stage), 0);
+            }
         }
         for pawn in pawn_structure.passers[color as usize] {
             let own_king_dist = chebyshev_distance(board.king(color), pawn);
@@ -546,7 +601,7 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
         }
         None => {}
     }
-    relative_score * halfmove_scale(board) / 256
+    relative_score * rule_scale(board) / 256
 }
 
 fn halfmove_scale(board: &Board) -> i32 {
@@ -625,6 +680,89 @@ fn backward_pawns(pawns: BitBoard, enemy_pawns: BitBoard, color: Color) -> BitBo
     BitBoard(own & has_neighbor & !support_span & stop_attacked)
 }
 
+/// Squares where a `color` minor piece would sit on an outpost: pawn-defended,
+/// on relative ranks 4-6, and never attackable by an enemy pawn advance.
+fn outpost_squares(pawns: BitBoard, enemy_pawns: BitBoard, color: Color) -> BitBoard {
+    const WHITE_OUTPOST_RANKS: u64 = 0x0000_FFFF_FF00_0000;
+    const BLACK_OUTPOST_RANKS: u64 = 0x0000_00FF_FFFF_0000;
+    let own_attacks = pawn_attack_bits(pawns.0, color);
+    let (enemy_attack_span, ranks) = match color {
+        Color::White => (
+            south_fill(pawn_attack_bits(enemy_pawns.0, Color::Black)),
+            WHITE_OUTPOST_RANKS,
+        ),
+        Color::Black => (
+            north_fill(pawn_attack_bits(enemy_pawns.0, Color::White)),
+            BLACK_OUTPOST_RANKS,
+        ),
+    };
+    BitBoard(own_attacks & !enemy_attack_span & ranks)
+}
+
+/// Danger units for safe checking squares: squares from which a `color` piece
+/// could check the enemy king right now, that are neither occupied by `color`
+/// nor defended by the enemy.
+fn safe_check_units(board: &Board, color: Color, enemy_defended: BitBoard) -> i32 {
+    let occupied = board.occupied();
+    let king = board.king(!color);
+    let safe = !enemy_defended & !board.colors(color);
+    let knight_origins = get_knight_moves(king) & safe;
+    let bishop_origins = get_bishop_moves(king, occupied) & safe;
+    let rook_origins = get_rook_moves(king, occupied) & safe;
+
+    let mut knight_attacks = BitBoard::EMPTY;
+    for knight in board.colored_pieces(color, Piece::Knight) {
+        knight_attacks |= get_knight_moves(knight);
+    }
+    let mut bishop_attacks = BitBoard::EMPTY;
+    for bishop in board.colored_pieces(color, Piece::Bishop) {
+        bishop_attacks |= get_bishop_moves(bishop, occupied);
+    }
+    let mut rook_attacks = BitBoard::EMPTY;
+    for rook in board.colored_pieces(color, Piece::Rook) {
+        rook_attacks |= get_rook_moves(rook, occupied);
+    }
+    let mut queen_attacks = BitBoard::EMPTY;
+    for queen in board.colored_pieces(color, Piece::Queen) {
+        queen_attacks |= get_bishop_moves(queen, occupied) | get_rook_moves(queen, occupied);
+    }
+
+    SAFE_CHECK_KNIGHT_UNITS * (knight_origins & knight_attacks).len() as i32
+        + SAFE_CHECK_BISHOP_UNITS * (bishop_origins & bishop_attacks).len() as i32
+        + SAFE_CHECK_ROOK_UNITS * (rook_origins & rook_attacks).len() as i32
+        + SAFE_CHECK_QUEEN_UNITS * ((bishop_origins | rook_origins) & queen_attacks).len() as i32
+}
+
+/// True for a pure opposite-colored-bishop ending: exactly one bishop each on
+/// opposite square colors and no other pieces beyond kings and pawns.
+fn opposite_colored_bishop_ending(board: &Board) -> bool {
+    if !(board.pieces(Piece::Knight) | board.pieces(Piece::Rook) | board.pieces(Piece::Queen))
+        .is_empty()
+    {
+        return false;
+    }
+    let white = board.colored_pieces(Color::White, Piece::Bishop);
+    let black = board.colored_pieces(Color::Black, Piece::Bishop);
+    let (Some(white), Some(black)) = (
+        (white.len() == 1).then(|| white.into_iter().next().unwrap()),
+        (black.len() == 1).then(|| black.into_iter().next().unwrap()),
+    ) else {
+        return false;
+    };
+    (white.file() as usize + white.rank() as usize) % 2
+        != (black.file() as usize + black.rank() as usize) % 2
+}
+
+/// Combined post-taper scale: fifty-move damping and drawish-ending scaling.
+/// `halfmove_scale` is always even, so the division stays exact.
+fn rule_scale(board: &Board) -> i32 {
+    let mut scale = halfmove_scale(board);
+    if opposite_colored_bishop_ending(board) {
+        scale = scale * OCB_ENDING_SCALE / 256;
+    }
+    scale
+}
+
 fn king_shield_pawns(board: &Board, color: Color) -> i32 {
     let king = board.king(color);
     let shield_rank = king.rank() as i32 + if color == Color::White { 1 } else { -1 };
@@ -663,8 +801,14 @@ fn threat_counts(
     ]
 }
 
-fn king_danger_units(base_units: i32, attackers: i32, undefended: i32, shield: i32) -> usize {
-    (base_units + 2 * attackers.saturating_sub(1) + 2 * undefended - 2 * shield)
+fn king_danger_units(
+    base_units: i32,
+    attackers: i32,
+    undefended: i32,
+    shield: i32,
+    safe_checks: i32,
+) -> usize {
+    (base_units + 2 * attackers.saturating_sub(1) + 2 * undefended - 2 * shield + safe_checks)
         .clamp(0, (KING_ATTACK_CURVE_LEN - 1) as i32) as usize
 }
 
@@ -806,6 +950,33 @@ mod evaluation_tests {
     }
 
     #[test]
+    fn opposite_colored_bishop_endings_are_scaled_toward_a_draw() {
+        let ocb: Board = "8/5kp1/8/2b2B2/8/6P1/5K2/8 w - - 0 1".parse().unwrap();
+        let same: Board = "8/5kp1/8/2b1B3/8/6P1/5K2/8 w - - 0 1".parse().unwrap();
+        let rooks: Board = "8/5kp1/8/2b2B2/8/6P1/5K2/R6r w - - 0 1".parse().unwrap();
+        assert!(opposite_colored_bishop_ending(&ocb));
+        assert!(!opposite_colored_bishop_ending(&same));
+        assert!(!opposite_colored_bishop_ending(&rooks));
+        assert_eq!(
+            rule_scale(&ocb),
+            halfmove_scale(&ocb) * OCB_ENDING_SCALE / 256
+        );
+    }
+
+    #[test]
+    fn outposts_require_pawn_support_and_safety_from_pawn_evictions() {
+        // Nd5 is protected by e4 and no black pawn can ever attack d5.
+        let board: Board = "3k4/6p1/8/3N4/4P3/8/8/3K4 w - - 0 1".parse().unwrap();
+        let white_pawns = board.colored_pieces(Color::White, Piece::Pawn);
+        let black_pawns = board.colored_pieces(Color::Black, Piece::Pawn);
+        assert!(outpost_squares(white_pawns, black_pawns, Color::White).has(Square::D5));
+        // With a black pawn on c7 the eviction ...c6 is always available.
+        let contested: Board = "3k4/2p5/4p3/3N4/4P3/8/8/3K4 w - - 0 1".parse().unwrap();
+        let black_pawns = contested.colored_pieces(Color::Black, Piece::Pawn);
+        assert!(!outpost_squares(white_pawns, black_pawns, Color::White).has(Square::D5));
+    }
+
+    #[test]
     fn halfmove_clock_damps_the_complete_evaluation() {
         let fresh = "7k/8/8/8/8/8/Q7/6K1 w - - 0 1".parse::<Board>().unwrap();
         let stale = "7k/8/8/8/8/8/Q7/6K1 w - - 80 41".parse::<Board>().unwrap();
@@ -842,11 +1013,13 @@ mod evaluation_tests {
 
     #[test]
     fn king_danger_compounds_attackers_and_is_reduced_by_the_pawn_shield() {
-        let lone_attacker = king_danger_units(2, 1, 0, 0);
-        let coordinated_attack = king_danger_units(9, 3, 2, 0);
-        let shielded_attack = king_danger_units(9, 3, 2, 3);
+        let lone_attacker = king_danger_units(2, 1, 0, 0, 0);
+        let coordinated_attack = king_danger_units(9, 3, 2, 0, 0);
+        let shielded_attack = king_danger_units(9, 3, 2, 3, 0);
+        let checked_attack = king_danger_units(9, 3, 2, 3, 5);
         assert!(KING_ATTACK_CURVE[coordinated_attack] > 3 * KING_ATTACK_CURVE[lone_attacker]);
         assert!(KING_ATTACK_CURVE[shielded_attack] < KING_ATTACK_CURVE[coordinated_attack]);
+        assert!(KING_ATTACK_CURVE[checked_attack] > KING_ATTACK_CURVE[shielded_attack]);
     }
 }
 
@@ -1006,6 +1179,11 @@ pub mod tuning {
         weights[ROOK_BEHIND_PASSER_EG] = ROOK_BEHIND_PASSER_BONUS_EG;
         weights[ROOK_ON_SEVENTH_MG] = ROOK_ON_SEVENTH_BONUS_MG;
         weights[ROOK_ON_SEVENTH_EG] = ROOK_ON_SEVENTH_BONUS_EG;
+        weights[KNIGHT_OUTPOST_MG] = KNIGHT_OUTPOST_BONUS_MG;
+        weights[KNIGHT_OUTPOST_EG] = KNIGHT_OUTPOST_BONUS_EG;
+        weights[BISHOP_OUTPOST_MG] = BISHOP_OUTPOST_BONUS_MG;
+        weights[BISHOP_OUTPOST_EG] = BISHOP_OUTPOST_BONUS_EG;
+        weights[STORM_MG_START..STORM_MG_START + STORM_LEN].copy_from_slice(&PAWN_STORM_BONUS_MG);
         weights
     }
 
@@ -1111,6 +1289,7 @@ pub mod tuning {
                 king_attackers[color as usize],
                 undefended_zone,
                 super::king_shield_pawns(board, !color),
+                super::safe_check_units(board, color, all_attacks[!color as usize]),
             );
             mg[KING_ATTACK_CURVE_START + units] += sign;
             mg[PAWN_THREAT_MG] += sign * pawn_targets;
@@ -1148,7 +1327,7 @@ pub mod tuning {
             direct,
             phase: phase.min(24),
             perspective: color_sign(board.side_to_move()),
-            rule_scale: super::halfmove_scale(board),
+            rule_scale: super::rule_scale(board),
             offset,
             forced_draw: kpk == Some(false),
         }
@@ -1172,6 +1351,27 @@ pub mod tuning {
             if count > 1 {
                 mg[DOUBLED_MG] -= sign * (count - 1);
                 eg[DOUBLED_EG] -= sign * (count - 1);
+            }
+        }
+        let outposts = super::outpost_squares(pawns, enemy_pawns, color);
+        let knight_outposts = (board.colored_pieces(color, Piece::Knight) & outposts).len() as i32;
+        let bishop_outposts = (board.colored_pieces(color, Piece::Bishop) & outposts).len() as i32;
+        mg[KNIGHT_OUTPOST_MG] += sign * knight_outposts;
+        eg[KNIGHT_OUTPOST_EG] += sign * knight_outposts;
+        mg[BISHOP_OUTPOST_MG] += sign * bishop_outposts;
+        eg[BISHOP_OUTPOST_EG] += sign * bishop_outposts;
+        let enemy_king_file = board.king(!color).file() as i32;
+        for pawn in pawns {
+            if (pawn.file() as i32 - enemy_king_file).abs() > 1 {
+                continue;
+            }
+            let relative_rank = if color == Color::White {
+                pawn.rank() as usize
+            } else {
+                7 - pawn.rank() as usize
+            };
+            if let Some(stage) = relative_rank.checked_sub(2) {
+                mg[STORM_MG_START + stage.min(STORM_LEN - 1)] += sign;
             }
         }
         for pawn in super::connected_pawns(pawns, color) {
@@ -1414,6 +1614,8 @@ pub mod tuning {
                 "r3k2r/ppp2ppp/2n1bn2/3qp3/3P4/2N1PN2/PPP1BPPP/R2QK2R w KQkq - 4 10",
                 "8/2p2pk1/1p1p2p1/p2P3p/P1P1P3/1P3K2/5PP1/8 b - - 0 35",
                 "6k1/R4ppp/8/1P6/8/8/1R3PPP/6K1 w - - 0 1",
+                "3k4/8/8/3N4/4P3/8/8/3K4 w - - 0 1",
+                "8/5kp1/8/2b2B2/8/6P1/5K2/8 w - - 20 40",
                 "7k/8/8/8/8/8/R7/6K1 w - - 0 1",
                 "7k/8/8/8/8/8/4N3/2B3K1 w - - 0 1",
                 "8/kPK5/8/8/8/8/8/8 w - - 0 1",
