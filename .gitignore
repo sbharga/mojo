@@ -6,6 +6,7 @@ dist/
 coverage/
 engine/target/
 engine/pkg-spsa/
+engine/baselines/
 web/node_modules/
 web/dist/
 web/public/stockfish/

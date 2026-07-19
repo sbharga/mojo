@@ -20,14 +20,16 @@ use crate::eval::insufficient_material;
 pub(crate) use moves::legal_moves;
 pub(crate) use moves::{fallback, played};
 
-use moves::{captured_value, decode_move, encode_move, is_capture, repetition_key, rule_key};
+use moves::{
+    captured_value, decode_move, encode_move, is_capture, repetition_key, rule_key, rule_key_from,
+};
 use ordering::{MovePicker, QuiescencePicker, RootMovePicker, RootMoveStat, move_base_index};
 use see::static_exchange;
 use tt::{Bound, TT_BUCKETS, TT_ENTRIES, TTBucket, TTEntry, score_from_tt, score_to_tt};
 
 pub(crate) const MATE_SCORE: i32 = 30_000;
 pub(crate) const INF: i32 = 32_000;
-pub(crate) const MAX_PLY: usize = 64;
+pub(crate) const MAX_PLY: usize = 128;
 const MAX_MOVES: usize = 218;
 const DEFAULT_TIME_CHECK_INTERVAL: u64 = 256;
 const MIN_TIME_CHECK_INTERVAL: u64 = 64;
@@ -193,7 +195,7 @@ pub(crate) struct SearchResult {
 pub(crate) struct SearchCore {
     table: Box<[TTBucket]>,
     killers: [[Option<Move>; 2]; MAX_PLY],
-    history: [[i32; 64]; 64],
+    history: [[[i32; 64]; 64]; 2],
     continuation_history: Box<[i16]>,
     continuation_history_2: Box<[i16]>,
     conthist_stack: [Option<usize>; MAX_PLY],
@@ -249,7 +251,7 @@ impl SearchCore {
         Self {
             table: vec![TTBucket::default(); TT_BUCKETS].into_boxed_slice(),
             killers: [[None; 2]; MAX_PLY],
-            history: [[0; 64]; 64],
+            history: [[[0; 64]; 64]; 2],
             continuation_history: vec![0; ordering::CONTINUATION_HISTORY_ENTRIES]
                 .into_boxed_slice(),
             continuation_history_2: vec![0; ordering::CONTINUATION_HISTORY_ENTRIES]
@@ -367,9 +369,11 @@ impl SearchCore {
             self.previous_iteration_ms = None;
             self.smoothed_ebf = None;
             self.generation = self.generation.wrapping_add(1);
-            for row in &mut self.history {
-                for value in row {
-                    *value /= 2;
+            for side in &mut self.history {
+                for row in side {
+                    for value in row {
+                        *value /= 2;
+                    }
                 }
             }
             for value in &mut self.continuation_history {
@@ -712,7 +716,7 @@ impl SearchCore {
             return self.quiescence(board, alpha, beta, ply);
         }
 
-        let key = rule_key(board);
+        let key = self.node_rule_key(board);
         let original_alpha = alpha;
         let entry = excluded_move.is_none().then(|| self.probe(key)).flatten();
         let tt_best = entry.and_then(|value| self.valid_tt_move(board, value));
@@ -1189,7 +1193,7 @@ impl SearchCore {
             return 0;
         }
 
-        let key = rule_key(board);
+        let key = self.node_rule_key(board);
         let original_alpha = alpha;
         let entry = self.probe(key);
         if let Some(entry) = entry
@@ -1289,11 +1293,27 @@ impl SearchCore {
         best_score
     }
 
+    /// The current node's `repetition_key`, read from the search path stack when
+    /// available (the parent already computed and pushed it) instead of rehashing.
+    fn node_repetition_key(&self, board: &Board) -> u64 {
+        let key = self
+            .path
+            .last()
+            .copied()
+            .unwrap_or_else(|| repetition_key(board));
+        debug_assert_eq!(key, repetition_key(board));
+        key
+    }
+
+    fn node_rule_key(&self, board: &Board) -> u64 {
+        rule_key_from(self.node_repetition_key(board), board.halfmove_clock())
+    }
+
     fn is_draw(&self, board: &Board) -> bool {
         if board.halfmove_clock() >= 100 || insufficient_material(board) {
             return true;
         }
-        let current = *self.path.last().unwrap_or(&repetition_key(board));
+        let current = self.node_repetition_key(board);
         // A null move is a search heuristic, not a legal move. Positions from
         // real game history or the pre-null search path therefore cannot
         // contribute to a repetition claim inside that synthetic subtree.
@@ -1872,7 +1892,7 @@ mod tests {
     #[test]
     fn improving_eval_stack_tightens_pruning_when_the_position_worsens() {
         let mut search = SearchCore::new();
-        assert_eq!(std::mem::size_of_val(&search.static_evals), 128);
+        assert_eq!(std::mem::size_of_val(&search.static_evals), MAX_PLY * 2);
         search.static_evals[0] = 100;
         assert_eq!(search.record_static_eval(2, 101), Some(true));
         assert_eq!(search.record_static_eval(4, 90), Some(false));

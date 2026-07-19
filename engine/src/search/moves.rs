@@ -123,7 +123,13 @@ pub(crate) fn repetition_key(board: &Board) -> u64 {
 }
 
 pub(crate) fn rule_key(board: &Board) -> u64 {
-    repetition_key(board) ^ u64::from(board.halfmove_clock()).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    rule_key_from(repetition_key(board), board.halfmove_clock())
+}
+
+/// `rule_key` for a position whose `repetition_key` is already known (e.g. from
+/// the search path stack), avoiding a second hash computation.
+pub(crate) fn rule_key_from(repetition: u64, halfmove_clock: u8) -> u64 {
+    repetition ^ u64::from(halfmove_clock).wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
 pub(crate) fn encode_move(mv: Move) -> u16 {
