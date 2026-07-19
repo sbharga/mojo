@@ -1031,6 +1031,12 @@ pub mod tuning {
 
     pub const PARAMETER_COUNT: usize = super::PARAMETER_COUNT;
 
+    /// Parameter indices that must stay frozen at their base values during
+    /// fitting: the tapered MG/EG piece values. Search pruning margins are
+    /// hard-calibrated to the base centipawn scale, so letting a fit re-scale
+    /// material regresses play even when held-out loss improves.
+    pub const MATERIAL_ANCHOR: std::ops::Range<usize> = MG_VALUE_START..MG_PST_START;
+
     /// Linear coefficients for one position, split so tapered interpolation
     /// remains identical to the production evaluator.
     pub struct LinearFeatures {
