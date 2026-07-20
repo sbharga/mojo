@@ -141,7 +141,11 @@ h1 {
   width: min(100%, 760px);
   box-shadow: 0 16px 46px #0008;
 }
-.board-shell > div {
+/* react-chessboard v5 renders its drag overlay (the piece being dragged) as a
+   sibling `div` alongside the board `div`, both direct children of this
+   shell. Target the board by its id so a dragged piece (position: fixed)
+   isn't forced to 100% of the viewport by this rule. */
+#mojo-board-board {
   width: 100% !important;
   height: auto !important;
 }
