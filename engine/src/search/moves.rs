@@ -89,13 +89,11 @@ pub(crate) fn fallback(board: &Board) -> Option<Move> {
 
 pub(crate) fn is_capture(board: &Board, mv: Move) -> bool {
     board.colors(!board.side_to_move()).has(mv.to)
-        || (board.piece_on(mv.from) == Some(Piece::Pawn) && mv.from.file() != mv.to.file())
+        || (board.pieces(Piece::Pawn).has(mv.from) && mv.from.file() != mv.to.file())
 }
 
-pub(crate) fn captured_value(board: &Board, mv: Move) -> i32 {
-    if !is_capture(board, mv) {
-        return 0;
-    }
+pub(crate) fn captured_value_for_capture(board: &Board, mv: Move) -> i32 {
+    debug_assert!(is_capture(board, mv));
     board
         .piece_on(mv.to)
         .map_or_else(|| piece_value(Piece::Pawn), piece_value)
@@ -216,7 +214,6 @@ mod tests {
             let mv = text.parse::<Move>().unwrap();
             assert!(board.is_legal(mv));
             assert!(!is_capture(&board, mv));
-            assert_eq!(captured_value(&board, mv), 0);
         }
     }
 }

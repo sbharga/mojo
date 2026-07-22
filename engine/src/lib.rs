@@ -417,9 +417,16 @@ mod tests {
 
     #[test]
     fn recognizes_threefold_repetition_from_game_history() {
-        let board = Board::default();
+        let mut board = Board::default();
+        let mut prior = Vec::new();
+        for notation in [
+            "g1f3", "g8f6", "f3g1", "f6g8", "g1f3", "g8f6", "f3g1", "f6g8",
+        ] {
+            prior.push(board.clone());
+            board = played(&board, notation.parse().unwrap());
+        }
         let mut search = SearchCore::new();
-        search.set_position(&board, &[board.clone(), board.clone()]);
+        search.set_position(&board, &prior);
         let result = search.analyze_depth(&board, 4, 1, 10_000.0);
         assert!(result.lines.is_empty());
     }
