@@ -21,10 +21,11 @@ pub(crate) use moves::legal_moves;
 pub(crate) use moves::{fallback, played};
 
 use moves::{
-    captured_value, decode_move, encode_move, is_capture, repetition_key, rule_key, rule_key_from,
+    captured_value_for_capture, decode_move, encode_move, is_capture, repetition_key, rule_key,
+    rule_key_from,
 };
 use ordering::{MovePicker, QuiescencePicker, RootMovePicker, RootMoveStat, move_base_index};
-use see::static_exchange;
+use see::static_exchange_capture;
 use tt::{Bound, TT_BUCKETS, TT_ENTRIES, TTBucket, TTEntry, score_from_tt, score_to_tt};
 
 pub(crate) const MATE_SCORE: i32 = 30_000;
@@ -970,7 +971,7 @@ impl SearchCore {
         let mut searched_quiets = MoveList::new();
         let mut searched_captures = MoveList::new();
 
-        while let Some(mv) = picker.next(self) {
+        while let Some((mv, picked_quiet_history)) = picker.next(self) {
             legal_moves_seen += 1;
             let move_index = index;
             index += 1;
@@ -980,11 +981,7 @@ impl SearchCore {
             let quiet = !capture && mv.promotion.is_none();
             let defends_threat = quiet
                 && threat_move.is_some_and(|threat| defends_against_threat(board, &child, threat));
-            let quiet_history = if quiet {
-                self.quiet_history_score(board, mv, prev_move, ply)
-            } else {
-                0
-            };
+            let quiet_history = if quiet { picked_quiet_history } else { 0 };
             let capture_history = if capture {
                 self.capture_history_score(board, mv)
             } else {
@@ -1000,7 +997,8 @@ impl SearchCore {
             {
                 if capture
                     && depth <= SEE_PRUNE_MAX_DEPTH
-                    && static_exchange(board, mv) < capture_see_threshold(depth, capture_history)
+                    && static_exchange_capture(board, mv)
+                        < capture_see_threshold(depth, capture_history)
                 {
                     continue;
                 }
@@ -1209,7 +1207,12 @@ impl SearchCore {
         }
 
         let in_check = !board.checkers().is_empty();
-        if !board.generate_moves(|_| true) {
+        let mut picker = if in_check {
+            QuiescencePicker::new(board, true, self, ply)
+        } else {
+            QuiescencePicker::empty()
+        };
+        if (in_check && picker.is_empty()) || (!in_check && !board.generate_moves(|_| true)) {
             return terminal_score(board, ply);
         }
         let raw_stand_pat = entry
@@ -1234,7 +1237,9 @@ impl SearchCore {
             alpha = alpha.max(stand_pat);
         }
 
-        let mut picker = QuiescencePicker::new(board, in_check, self, ply);
+        if !in_check {
+            picker = QuiescencePicker::new(board, false, self, ply);
+        }
         let mut best_move = None;
         while let Some((mv, see)) = picker.next() {
             let capture = is_capture(board, mv);
@@ -1247,7 +1252,8 @@ impl SearchCore {
                 && capture
                 && mv.promotion.is_none()
                 && !gives_check
-                && stand_pat + captured_value(board, mv) + self.delta_pruning_margin() < alpha
+                && stand_pat + captured_value_for_capture(board, mv) + self.delta_pruning_margin()
+                    < alpha
             {
                 continue;
             }
@@ -1312,6 +1318,12 @@ impl SearchCore {
     fn is_draw(&self, board: &Board) -> bool {
         if board.halfmove_clock() >= 100 || insufficient_material(board) {
             return true;
+        }
+        // Repeating the current position twice requires at least two reversible
+        // moves by each side. A pawn move or capture resets this clock, so below
+        // four half-moves no legal history can contain a threefold repetition.
+        if board.halfmove_clock() < 4 {
+            return false;
         }
         let current = self.node_repetition_key(board);
         // A null move is a search heuristic, not a legal move. Positions from
@@ -1719,7 +1731,7 @@ fn defends_against_threat(board: &Board, child: &Board, threat: Move) -> bool {
         return true;
     }
     is_capture(&null_board, threat)
-        && (!is_capture(child, threat) || static_exchange(child, threat) < 0)
+        && (!is_capture(child, threat) || static_exchange_capture(child, threat) < 0)
 }
 
 fn should_probcut(
@@ -1785,6 +1797,20 @@ mod tests {
         assert!(first_nodes > 1);
         assert_eq!(second, first);
         assert_eq!(search.nodes, 1);
+    }
+
+    #[test]
+    fn quiescence_distinguishes_empty_check_evasions_from_stalemate() {
+        for (fen, expected) in [
+            ("7k/6Q1/6K1/8/8/8/8/8 b - - 0 1", -MATE_SCORE),
+            ("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1", 0),
+        ] {
+            let board = fen.parse::<Board>().unwrap();
+            let mut search = SearchCore::new();
+            search.path.push(repetition_key(&board));
+
+            assert_eq!(search.quiescence(&board, -INF, INF, 0), expected, "{fen}");
+        }
     }
 
     #[test]
@@ -2007,10 +2033,14 @@ mod tests {
 
     #[test]
     fn null_move_boundary_excludes_real_history_from_repetition() {
-        let board = Board::default().null_move().unwrap();
+        let board = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 8 5"
+            .parse::<Board>()
+            .unwrap()
+            .null_move()
+            .unwrap();
         let key = repetition_key(&board);
         let mut search = SearchCore::new();
-        search.prior_positions = vec![key, key];
+        search.prior_positions = vec![0, key, 0, key];
         search.path.push(repetition_key(&Board::default()));
         search.null_boundary = Some(search.path.len());
         search.path.push(key);

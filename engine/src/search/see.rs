@@ -7,7 +7,7 @@ use cozy_chess::{
 
 use crate::eval::piece_value;
 
-use super::moves::{captured_value, is_capture};
+use super::moves::{captured_value_for_capture, is_capture};
 
 fn attackers_to(board: &Board, target: Square, color: Color, occupied: BitBoard) -> BitBoard {
     let pieces = board.colors(color) & occupied;
@@ -22,12 +22,10 @@ fn attackers_to(board: &Board, target: Square, color: Color, occupied: BitBoard)
             & (board.pieces(Piece::Rook) | board.pieces(Piece::Queen)))
 }
 
-pub(crate) fn static_exchange(board: &Board, mv: Move) -> i32 {
-    if !is_capture(board, mv) {
-        return 0;
-    }
+pub(crate) fn static_exchange_capture(board: &Board, mv: Move) -> i32 {
+    debug_assert!(is_capture(board, mv));
     let mut gains = [0_i32; 32];
-    gains[0] = captured_value(board, mv)
+    gains[0] = captured_value_for_capture(board, mv)
         + mv.promotion
             .map_or(0, |piece| piece_value(piece) - piece_value(Piece::Pawn));
     let mut occupied = board.occupied() & !mv.from.bitboard();
@@ -74,11 +72,11 @@ mod tests {
     #[test]
     fn static_exchange_distinguishes_winning_and_losing_captures() {
         let winning = "7k/3q4/8/8/8/8/3R4/7K w - - 0 1".parse::<Board>().unwrap();
-        assert!(static_exchange(&winning, "d2d7".parse().unwrap()) > 0);
+        assert!(static_exchange_capture(&winning, "d2d7".parse().unwrap()) > 0);
 
         let losing = "3q3k/3p4/8/8/8/8/8/3Q3K w - - 0 1"
             .parse::<Board>()
             .unwrap();
-        assert!(static_exchange(&losing, "d1d7".parse().unwrap()) < 0);
+        assert!(static_exchange_capture(&losing, "d1d7".parse().unwrap()) < 0);
     }
 }
