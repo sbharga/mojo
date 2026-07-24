@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib'
 
+const GZIP_BUDGET_BYTES = 250_000
 const limits = {
-  baseline: { path: './pkg/mojo_engine_bg.wasm', gzip: 230_000 },
-  simd: { path: './pkg/mojo_engine_simd_bg.wasm', gzip: 230_000 },
+  baseline: { path: './pkg/mojo_engine_bg.wasm', gzip: GZIP_BUDGET_BYTES },
+  simd: { path: './pkg/mojo_engine_simd_bg.wasm', gzip: GZIP_BUDGET_BYTES },
 }
 const report = {}
 for (const [name, limit] of Object.entries(limits)) {

@@ -1,10 +1,8 @@
 //! Direct-mapped cache for pawn-only evaluation work.
 
-use cozy_chess::Board;
+use crate::eval::{PawnStructure, evaluate_with_pawns, pawn_structure};
 
-use crate::eval::{PawnStructure, evaluate_with_pawns, pawn_structure, pawn_structure_key};
-
-use super::SearchCore;
+use super::{SearchCore, position::SearchPosition};
 
 const PAWN_CACHE_ENTRIES: usize = 1 << 12;
 
@@ -15,8 +13,9 @@ pub(super) struct PawnCacheEntry {
 }
 
 impl SearchCore {
-    pub(super) fn raw_evaluate(&mut self, board: &Board) -> i32 {
-        let key = pawn_structure_key(board);
+    pub(super) fn raw_evaluate(&mut self, position: &SearchPosition) -> i32 {
+        let board = position.board();
+        let key = position.pawn_key();
         let index = key as usize & (PAWN_CACHE_ENTRIES - 1);
         let entry = self.pawn_cache[index];
         let structure = if entry.key == key {
@@ -26,7 +25,7 @@ impl SearchCore {
             self.pawn_cache[index] = PawnCacheEntry { key, structure };
             structure
         };
-        evaluate_with_pawns(board, structure)
+        evaluate_with_pawns(board, structure, position.accumulator())
     }
 }
 
@@ -36,7 +35,9 @@ pub(super) fn empty_cache() -> Box<[PawnCacheEntry]> {
 
 #[cfg(test)]
 mod tests {
-    use crate::eval::evaluate;
+    use cozy_chess::Board;
+
+    use crate::eval::{evaluate, pawn_structure_key};
 
     use super::*;
 
@@ -53,8 +54,9 @@ mod tests {
             "8/8/8/8/3P4/8/3K4/7k w - - 0 1",
         ] {
             let board = fen.parse::<Board>().unwrap();
-            assert_eq!(search.raw_evaluate(&board), evaluate(&board));
-            assert_eq!(search.raw_evaluate(&board), evaluate(&board));
+            let position = SearchPosition::from_board(&board);
+            assert_eq!(search.raw_evaluate(&position), evaluate(&board));
+            assert_eq!(search.raw_evaluate(&position), evaluate(&board));
         }
     }
 
@@ -64,8 +66,13 @@ mod tests {
         let far = "8/8/8/8/3P4/8/8/K6k w - - 0 1".parse::<Board>().unwrap();
         assert_eq!(pawn_structure_key(&near), pawn_structure_key(&far));
         let mut search = SearchCore::new();
-        assert_eq!(search.raw_evaluate(&near), evaluate(&near));
-        assert_eq!(search.raw_evaluate(&far), evaluate(&far));
-        assert_ne!(search.raw_evaluate(&near), search.raw_evaluate(&far));
+        let near_position = SearchPosition::from_board(&near);
+        let far_position = SearchPosition::from_board(&far);
+        assert_eq!(search.raw_evaluate(&near_position), evaluate(&near));
+        assert_eq!(search.raw_evaluate(&far_position), evaluate(&far));
+        assert_ne!(
+            search.raw_evaluate(&near_position),
+            search.raw_evaluate(&far_position)
+        );
     }
 }

@@ -1,6 +1,8 @@
+#[cfg(feature = "tuning")]
+use cozy_chess::get_pawn_attacks;
 use cozy_chess::{
     BitBoard, Board, Color, File, Piece, Rank, Square, get_bishop_moves, get_king_moves,
-    get_knight_moves, get_pawn_attacks, get_rook_moves,
+    get_knight_moves, get_rook_moves,
 };
 
 use crate::eval_tuned::DELTAS;
@@ -227,7 +229,11 @@ pub(crate) fn piece_value(piece: Piece) -> i32 {
 }
 
 pub(crate) fn evaluate(board: &Board) -> i32 {
-    evaluate_with_pawns(board, pawn_structure(board))
+    evaluate_with_pawns(
+        board,
+        pawn_structure(board),
+        EvalAccumulator::from_board(board),
+    )
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -236,6 +242,7 @@ pub(crate) struct PawnStructure {
     passers: [BitBoard; 2],
 }
 
+#[cfg(test)]
 pub(crate) fn pawn_structure_key(board: &Board) -> u64 {
     let mut key = 0_u64;
     for color in [Color::White, Color::Black] {
@@ -244,6 +251,127 @@ pub(crate) fn pawn_structure_key(board: &Board) -> u64 {
         }
     }
     key
+}
+
+/// The position terms that can be updated exactly from a move without
+/// regenerating attacks. Search nodes carry this alongside the board so the
+/// leaf evaluator only computes dynamic mobility, threats, and king safety.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct EvalAccumulator {
+    packed_score: PackedScore,
+    phase: i16,
+    pawn_key: u64,
+}
+
+/// Board facts shared by each incremental accumulator update. Computing these
+/// once in `SearchPosition::child` avoids repeating hot piece-map lookups.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MoveFacts {
+    pub(crate) color: Color,
+    pub(crate) moved: Piece,
+    pub(crate) victim: Option<Piece>,
+    pub(crate) is_castle: bool,
+}
+
+impl MoveFacts {
+    pub(crate) fn from_board(board: &Board, mv: cozy_chess::Move) -> Self {
+        let color = board.side_to_move();
+        Self {
+            color,
+            moved: board
+                .piece_on(mv.from)
+                .expect("legal move must have a piece on its origin"),
+            victim: board.piece_on(mv.to),
+            is_castle: board.colors(color).has(mv.to),
+        }
+    }
+}
+
+impl EvalAccumulator {
+    pub(crate) fn from_board(board: &Board) -> Self {
+        let mut accumulator = Self::default();
+        for piece in Piece::ALL {
+            for color in [Color::White, Color::Black] {
+                for square in board.colored_pieces(color, piece) {
+                    accumulator.add_piece(piece, color, square);
+                }
+            }
+        }
+        accumulator
+    }
+
+    pub(crate) fn after_move(self, mv: cozy_chess::Move, facts: MoveFacts) -> Self {
+        let mut next = self;
+        let MoveFacts {
+            color,
+            moved,
+            victim,
+            is_castle,
+        } = facts;
+
+        if is_castle {
+            debug_assert_eq!(moved, Piece::King);
+            let (king_file, rook_file) = if mv.from.file() < mv.to.file() {
+                (File::G, File::F)
+            } else {
+                (File::C, File::D)
+            };
+            let rank = mv.from.rank();
+            next.remove_piece(Piece::King, color, mv.from);
+            next.remove_piece(Piece::Rook, color, mv.to);
+            next.add_piece(Piece::King, color, Square::new(king_file, rank));
+            next.add_piece(Piece::Rook, color, Square::new(rook_file, rank));
+            return next;
+        }
+
+        next.remove_piece(moved, color, mv.from);
+        if let Some(victim) = victim {
+            next.remove_piece(victim, !color, mv.to);
+        } else if moved == Piece::Pawn && mv.from.file() != mv.to.file() {
+            let captured = Square::new(mv.to.file(), mv.from.rank());
+            next.remove_piece(Piece::Pawn, !color, captured);
+        }
+        next.add_piece(mv.promotion.unwrap_or(moved), color, mv.to);
+        next
+    }
+
+    pub(crate) fn pawn_key(self) -> u64 {
+        self.pawn_key
+    }
+
+    fn add_piece(&mut self, piece: Piece, color: Color, square: Square) {
+        let sign = if color == Color::White { 1 } else { -1 };
+        let index = if color == Color::White {
+            (square as usize) ^ 56
+        } else {
+            square as usize
+        };
+        self.packed_score +=
+            sign * (PACKED_VALUE[piece as usize] + PACKED_PST[piece as usize][index]);
+        self.phase += PHASE[piece as usize] as i16;
+        if piece == Piece::Pawn {
+            self.pawn_key ^= pawn_hash(square, color);
+        }
+    }
+
+    fn remove_piece(&mut self, piece: Piece, color: Color, square: Square) {
+        let sign = if color == Color::White { 1 } else { -1 };
+        let index = if color == Color::White {
+            (square as usize) ^ 56
+        } else {
+            square as usize
+        };
+        self.packed_score -=
+            sign * (PACKED_VALUE[piece as usize] + PACKED_PST[piece as usize][index]);
+        self.phase -= PHASE[piece as usize] as i16;
+        if piece == Piece::Pawn {
+            self.pawn_key ^= pawn_hash(square, color);
+        }
+    }
+}
+
+fn pawn_hash(square: Square, color: Color) -> u64 {
+    splitmix64(square as u64 + 64 * color as u64 + 1)
 }
 
 const fn splitmix64(mut value: u64) -> u64 {
@@ -344,9 +472,13 @@ pub(crate) fn pawn_structure(board: &Board) -> PawnStructure {
     structure
 }
 
-pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) -> i32 {
-    let mut score: PackedScore = 0;
-    let mut phase = 0;
+pub(crate) fn evaluate_with_pawns(
+    board: &Board,
+    pawn_structure: PawnStructure,
+    accumulator: EvalAccumulator,
+) -> i32 {
+    let mut score = accumulator.packed_score;
+    let phase = i32::from(accumulator.phase);
     let occupied = board.occupied();
     let king_zone = [
         get_king_moves(board.king(Color::White)) | board.king(Color::White).bitboard(),
@@ -358,26 +490,24 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
     ];
     let mut all_attacks = pawn_attacks;
     let mut minor_attacks = [BitBoard::EMPTY; 2];
+    let mut piece_attacks = [[BitBoard::EMPTY; 4]; 2];
     let mut king_attack_units = [0_i32; 2];
     let mut king_attackers = [0_i32; 2];
     let mut king_zone_attacks = [BitBoard::EMPTY; 2];
 
-    for piece in Piece::ALL {
+    for piece in [
+        Piece::Knight,
+        Piece::Bishop,
+        Piece::Rook,
+        Piece::Queen,
+        Piece::King,
+    ] {
         for color in [Color::White, Color::Black] {
             let sign = if color == Color::White { 1 } else { -1 };
             for square in board.colored_pieces(color, piece) {
-                let index = if color == Color::White {
-                    (square as usize) ^ 56
-                } else {
-                    square as usize
-                };
-                let piece_index = piece as usize;
-                score += sign * (PACKED_VALUE[piece_index] + PACKED_PST[piece_index][index]);
-                phase += PHASE[piece as usize];
-
                 let own = board.colors(color);
                 let raw_attacks = match piece {
-                    Piece::Pawn => get_pawn_attacks(square, color),
+                    Piece::Pawn => unreachable!("pawns are handled by the cached attack map"),
                     Piece::Knight => get_knight_moves(square),
                     Piece::Bishop => get_bishop_moves(square, occupied),
                     Piece::Rook => get_rook_moves(square, occupied),
@@ -387,10 +517,19 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
                     Piece::King => get_king_moves(square),
                 };
                 all_attacks[color as usize] |= raw_attacks;
+                if let Some(index) = match piece {
+                    Piece::Knight => Some(0),
+                    Piece::Bishop => Some(1),
+                    Piece::Rook => Some(2),
+                    Piece::Queen => Some(3),
+                    Piece::Pawn | Piece::King => None,
+                } {
+                    piece_attacks[color as usize][index] |= raw_attacks;
+                }
                 if matches!(piece, Piece::Knight | Piece::Bishop) {
                     minor_attacks[color as usize] |= raw_attacks;
                 }
-                if matches!(piece, Piece::Pawn | Piece::King) {
+                if piece == Piece::King {
                     continue;
                 }
                 let (mobility_weight, mobility_parameter) = match piece {
@@ -441,7 +580,12 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
             king_attackers[color as usize],
             undefended_zone,
             shield,
-            safe_check_units(board, color, all_attacks[!color as usize]),
+            safe_check_units(
+                board,
+                color,
+                all_attacks[!color as usize],
+                piece_attacks[color as usize],
+            ),
         );
         score += sign
             * pack(
@@ -463,10 +607,6 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
         let sign = if color == Color::White { 1 } else { -1 };
         let pawns = board.colored_pieces(color, Piece::Pawn);
         let enemy_pawns = board.colored_pieces(!color, Piece::Pawn);
-        let mut file_counts = [0_i32; 8];
-        for pawn in pawns {
-            file_counts[pawn.file() as usize] += 1;
-        }
         let outposts = outpost_squares(pawns, enemy_pawns, color);
         let knight_outposts = (board.colored_pieces(color, Piece::Knight) & outposts).len() as i32;
         let bishop_outposts = (board.colored_pieces(color, Piece::Bishop) & outposts).len() as i32;
@@ -481,11 +621,8 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
                         tuned(BISHOP_OUTPOST_BONUS_MG, BISHOP_OUTPOST_MG),
                         tuned(BISHOP_OUTPOST_BONUS_EG, BISHOP_OUTPOST_EG),
                     ));
-        let enemy_king_file = board.king(!color).file() as i32;
-        for pawn in pawns {
-            if (pawn.file() as i32 - enemy_king_file).abs() > 1 {
-                continue;
-            }
+        let king_files = adjacent_file_mask(board.king(!color).file() as usize);
+        for pawn in pawns & BitBoard(king_files) {
             let relative_rank = if color == Color::White {
                 pawn.rank() as usize
             } else {
@@ -518,10 +655,9 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
         let eighth = Rank::Eighth.relative_to(color);
         for rook in board.colored_pieces(color, Piece::Rook) {
             let file = rook.file() as usize;
-            if file_counts[file] == 0 {
-                let enemy_on_file = enemy_pawns
-                    .into_iter()
-                    .any(|pawn| pawn.file() as usize == file);
+            let file_mask = BitBoard(FILE_A_BITS << file);
+            if (pawns & file_mask).is_empty() {
+                let enemy_on_file = !(enemy_pawns & file_mask).is_empty();
                 score += sign
                     * if enemy_on_file {
                         pack(
@@ -575,7 +711,7 @@ pub(crate) fn evaluate_with_pawns(board: &Board, pawn_structure: PawnStructure) 
         bare_king_mating_bonus(board, Color::White) - bare_king_mating_bonus(board, Color::Black),
     );
 
-    phase = phase.min(24);
+    let phase = phase.min(24);
     let mg = mg_value(score);
     let eg = eg_value(score);
     let white_score = (mg * phase + eg * (24 - phase)) / 24;
@@ -609,16 +745,19 @@ fn halfmove_scale(board: &Board) -> i32 {
 }
 
 fn pawn_attacks(board: &Board, color: Color) -> BitBoard {
-    board
-        .colored_pieces(color, Piece::Pawn)
-        .into_iter()
-        .fold(BitBoard::EMPTY, |attacks, pawn| {
-            attacks | get_pawn_attacks(pawn, color)
-        })
+    BitBoard(pawn_attack_bits(
+        board.colored_pieces(color, Piece::Pawn).0,
+        color,
+    ))
 }
 
 const FILE_A_BITS: u64 = 0x0101_0101_0101_0101;
 const FILE_H_BITS: u64 = FILE_A_BITS << 7;
+
+fn adjacent_file_mask(file: usize) -> u64 {
+    let center = FILE_A_BITS << file;
+    center | east_one(center) | west_one(center)
+}
 
 fn east_one(bits: u64) -> u64 {
     (bits << 1) & !FILE_A_BITS
@@ -702,7 +841,12 @@ fn outpost_squares(pawns: BitBoard, enemy_pawns: BitBoard, color: Color) -> BitB
 /// Danger units for safe checking squares: squares from which a `color` piece
 /// could check the enemy king right now, that are neither occupied by `color`
 /// nor defended by the enemy.
-fn safe_check_units(board: &Board, color: Color, enemy_defended: BitBoard) -> i32 {
+fn safe_check_units(
+    board: &Board,
+    color: Color,
+    enemy_defended: BitBoard,
+    piece_attacks: [BitBoard; 4],
+) -> i32 {
     let occupied = board.occupied();
     let king = board.king(!color);
     let safe = !enemy_defended & !board.colors(color);
@@ -710,27 +854,10 @@ fn safe_check_units(board: &Board, color: Color, enemy_defended: BitBoard) -> i3
     let bishop_origins = get_bishop_moves(king, occupied) & safe;
     let rook_origins = get_rook_moves(king, occupied) & safe;
 
-    let mut knight_attacks = BitBoard::EMPTY;
-    for knight in board.colored_pieces(color, Piece::Knight) {
-        knight_attacks |= get_knight_moves(knight);
-    }
-    let mut bishop_attacks = BitBoard::EMPTY;
-    for bishop in board.colored_pieces(color, Piece::Bishop) {
-        bishop_attacks |= get_bishop_moves(bishop, occupied);
-    }
-    let mut rook_attacks = BitBoard::EMPTY;
-    for rook in board.colored_pieces(color, Piece::Rook) {
-        rook_attacks |= get_rook_moves(rook, occupied);
-    }
-    let mut queen_attacks = BitBoard::EMPTY;
-    for queen in board.colored_pieces(color, Piece::Queen) {
-        queen_attacks |= get_bishop_moves(queen, occupied) | get_rook_moves(queen, occupied);
-    }
-
-    SAFE_CHECK_KNIGHT_UNITS * (knight_origins & knight_attacks).len() as i32
-        + SAFE_CHECK_BISHOP_UNITS * (bishop_origins & bishop_attacks).len() as i32
-        + SAFE_CHECK_ROOK_UNITS * (rook_origins & rook_attacks).len() as i32
-        + SAFE_CHECK_QUEEN_UNITS * ((bishop_origins | rook_origins) & queen_attacks).len() as i32
+    SAFE_CHECK_KNIGHT_UNITS * (knight_origins & piece_attacks[0]).len() as i32
+        + SAFE_CHECK_BISHOP_UNITS * (bishop_origins & piece_attacks[1]).len() as i32
+        + SAFE_CHECK_ROOK_UNITS * (rook_origins & piece_attacks[2]).len() as i32
+        + SAFE_CHECK_QUEEN_UNITS * ((bishop_origins | rook_origins) & piece_attacks[3]).len() as i32
 }
 
 /// True for a pure opposite-colored-bishop ending: exactly one bishop each on
@@ -1208,6 +1335,7 @@ pub mod tuning {
         ];
         let mut all_attacks = pawn_attacks;
         let mut minor_attacks = [BitBoard::EMPTY; 2];
+        let mut piece_attacks = [[BitBoard::EMPTY; 4]; 2];
         let mut king_attack_units = [0_i32; 2];
         let mut king_attackers = [0_i32; 2];
         let mut king_zone_attacks = [BitBoard::EMPTY; 2];
@@ -1240,6 +1368,15 @@ pub mod tuning {
                         Piece::King => get_king_moves(square),
                     };
                     all_attacks[color as usize] |= raw_attacks;
+                    if let Some(index) = match piece {
+                        Piece::Knight => Some(0),
+                        Piece::Bishop => Some(1),
+                        Piece::Rook => Some(2),
+                        Piece::Queen => Some(3),
+                        Piece::Pawn | Piece::King => None,
+                    } {
+                        piece_attacks[color as usize][index] |= raw_attacks;
+                    }
                     if matches!(piece, Piece::Knight | Piece::Bishop) {
                         minor_attacks[color as usize] |= raw_attacks;
                     }
@@ -1295,7 +1432,12 @@ pub mod tuning {
                 king_attackers[color as usize],
                 undefended_zone,
                 super::king_shield_pawns(board, !color),
-                super::safe_check_units(board, color, all_attacks[!color as usize]),
+                super::safe_check_units(
+                    board,
+                    color,
+                    all_attacks[!color as usize],
+                    piece_attacks[color as usize],
+                ),
             );
             mg[KING_ATTACK_CURVE_START + units] += sign;
             mg[PAWN_THREAT_MG] += sign * pawn_targets;

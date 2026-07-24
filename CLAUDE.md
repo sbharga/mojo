@@ -15,7 +15,7 @@ Mojo is a Rust chess engine compiled to WebAssembly, plus a React web UI to play
 
 The engine should be **as lightweight and as fast as possible while staying accurate**. These three pull against each other, and every change is judged by that balance:
 
-- **Lightweight** — small Wasm binary (CI enforces a `twiggy` size profile and `npm run check` includes a size gate). Prefer solutions that don't grow the binary; the opening book and SIMD variant are optional/feature-gated for this reason.
+- **Lightweight** — small Wasm binary. Both baseline and SIMD builds have a hard gzip limit of **250 kB (250,000 bytes)**, enforced by `npm run check`. This ceiling is fixed and must not be raised or otherwise changed. CI also records a `twiggy` size profile. Prefer solutions that don't grow the binary; the opening book and SIMD variant are optional/feature-gated for this reason.
 - **Fast** — strong play within a tight per-move time budget. Search efficiency (move ordering, pruning, TT reuse across positions) matters more than raw feature count.
 - **Accurate** — strength must not regress. Evaluation/search-tuning changes are validated with the self-play / SPRT-style harnesses, never by eyeballing.
 

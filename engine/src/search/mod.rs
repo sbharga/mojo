@@ -7,6 +7,7 @@ mod correction;
 mod moves;
 mod ordering;
 mod pawn_cache;
+mod position;
 mod see;
 mod tt;
 
@@ -17,15 +18,18 @@ use serde::Deserialize;
 
 use crate::eval::insufficient_material;
 
+pub(crate) use moves::fallback;
 pub(crate) use moves::legal_moves;
-pub(crate) use moves::{fallback, played};
+#[cfg(test)]
+pub(crate) use moves::played;
 
 use moves::{
     captured_value_for_capture, decode_move, encode_move, is_capture, repetition_key, rule_key,
     rule_key_from,
 };
 use ordering::{MovePicker, QuiescencePicker, RootMovePicker, RootMoveStat, move_base_index};
-use see::static_exchange_capture;
+use position::SearchPosition;
+use see::static_exchange_ge_capture;
 use tt::{Bound, TT_BUCKETS, TT_ENTRIES, TTBucket, TTEntry, score_from_tt, score_to_tt};
 
 pub(crate) const MATE_SCORE: i32 = 30_000;
@@ -411,22 +415,22 @@ impl SearchCore {
         score: i32,
         depth: i16,
     ) -> usize {
-        let mut position = board.clone();
+        let mut position = SearchPosition::from_board(board);
         let count = moves.len().min(depth.max(0) as usize);
         for (ply, &mv) in moves.iter().take(count).enumerate() {
-            if !position.is_legal(mv) {
+            if !position.board().is_legal(mv) {
                 return ply;
             }
             let node_score = if ply.is_multiple_of(2) { score } else { -score };
             self.store(
-                rule_key(&position),
+                rule_key_from(position.repetition_key(), position.board().halfmove_clock()),
                 depth - ply as i16,
                 score_to_tt(node_score, ply),
                 Bound::Exact,
                 Some(mv),
                 None,
             );
-            position.play(mv);
+            position = position.child(mv);
         }
         count
     }
@@ -438,6 +442,7 @@ impl SearchCore {
         multi_pv: u8,
         time_limit_ms: f64,
     ) -> SearchResult {
+        let position = SearchPosition::from_board(board);
         let iteration_started = crate::now_ms();
         self.nodes = 0;
         self.next_clock_check = self.clock_check_interval;
@@ -448,12 +453,12 @@ impl SearchCore {
         }
         self.deadline_ms = crate::now_ms() + time_limit_ms.max(5.0);
         self.path.clear();
-        self.path.push(repetition_key(board));
+        self.path.push(position.repetition_key());
         self.static_evals.fill(i16::MIN);
-        let raw_eval = self.raw_evaluate(board);
-        self.static_evals[0] = compact_static_eval(self.corrected_static_eval(board, raw_eval));
+        let raw_eval = self.raw_evaluate(&position);
+        self.static_evals[0] = compact_static_eval(self.corrected_static_eval(&position, raw_eval));
         self.null_boundary = None;
-        if self.is_draw(board) {
+        if self.is_draw(&position) {
             return SearchResult {
                 nodes: 0,
                 root_node_fraction: 0.0,
@@ -476,7 +481,7 @@ impl SearchCore {
             let mut retries = 0;
             let mut line;
             loop {
-                line = self.search_root(board, depth, &excluded, alpha, beta);
+                line = self.search_root(&position, depth, &excluded, alpha, beta);
                 if self.timed_out {
                     break;
                 }
@@ -545,13 +550,14 @@ impl SearchCore {
 
     fn search_root(
         &mut self,
-        board: &Board,
+        position: &SearchPosition,
         depth: i16,
         excluded: &[Move],
         mut alpha: i32,
         beta: i32,
     ) -> Option<SearchLine> {
-        let key = rule_key(board);
+        let board = position.board();
+        let key = rule_key_from(position.repetition_key(), board.halfmove_clock());
         let original_alpha = alpha;
         let tt_best = self
             .probe(key)
@@ -569,8 +575,8 @@ impl SearchCore {
                 break;
             }
             let subtree_start = self.nodes;
-            let child = played(board, mv);
-            self.path.push(repetition_key(&child));
+            let child = position.child(mv);
+            self.path.push(child.repetition_key());
             let mut score = if index == 0 {
                 -self.negamax(
                     &child,
@@ -674,7 +680,7 @@ impl SearchCore {
     #[allow(clippy::too_many_arguments)]
     fn negamax(
         &mut self,
-        board: &Board,
+        position: &SearchPosition,
         mut depth: i16,
         mut alpha: i32,
         mut beta: i32,
@@ -686,16 +692,17 @@ impl SearchCore {
         excluded_move: Option<Move>,
         ordering_threat: Option<Move>,
     ) -> i32 {
+        let board = position.board();
         self.nodes += 1;
         self.pv_len[ply.min(MAX_PLY - 1)] = 0;
         if self.expired() {
             return 0;
         }
         if ply >= MAX_PLY - 1 {
-            let raw_eval = self.raw_evaluate(board);
-            return self.corrected_static_eval(board, raw_eval);
+            let raw_eval = self.raw_evaluate(position);
+            return self.corrected_static_eval(position, raw_eval);
         }
-        if self.is_draw(board) {
+        if self.is_draw(position) {
             return 0;
         }
         if crate::kpk::probe(board) == Some(false) {
@@ -714,10 +721,10 @@ impl SearchCore {
             return alpha;
         }
         if depth <= 0 {
-            return self.quiescence(board, alpha, beta, ply);
+            return self.quiescence(position, alpha, beta, ply);
         }
 
-        let key = self.node_rule_key(board);
+        let key = self.node_rule_key(position);
         let original_alpha = alpha;
         let entry = excluded_move.is_none().then(|| self.probe(key)).flatten();
         let tt_best = entry.and_then(|value| self.valid_tt_move(board, value));
@@ -753,14 +760,14 @@ impl SearchCore {
             && beta.abs() < MATE_SCORE - MAX_PLY as i32
             && board.halfmove_clock() < NULL_MOVE_HALFMOVE_LIMIT
             && has_non_pawn_material(board, board.side_to_move())
-            && let Some(null_board) = board.null_move()
+            && let Some(null_position) = position.null_child()
         {
             let reduction = NULL_MOVE_BASE_REDUCTION + depth / NULL_MOVE_DEPTH_DIVISOR;
             let previous_null_boundary = self.null_boundary;
             self.null_boundary = Some(self.path.len());
-            self.path.push(repetition_key(&null_board));
+            self.path.push(null_position.repetition_key());
             let null_score = -self.negamax(
-                &null_board,
+                &null_position,
                 depth - 1 - reduction,
                 -beta,
                 -beta + 1,
@@ -772,7 +779,7 @@ impl SearchCore {
                 None,
                 None,
             );
-            let null_threat = self.null_threat(&null_board, ply + 1);
+            let null_threat = self.null_threat(null_position.board(), ply + 1);
             self.path.pop();
             self.null_boundary = previous_null_boundary;
             if self.timed_out {
@@ -785,7 +792,7 @@ impl SearchCore {
                         self.null_verifications += 1;
                     }
                     let verification_score = self.negamax(
-                        board,
+                        position,
                         depth - reduction,
                         beta - 1,
                         beta,
@@ -821,10 +828,10 @@ impl SearchCore {
             Some(
                 entry
                     .and_then(TTEntry::static_eval)
-                    .unwrap_or_else(|| self.raw_evaluate(board)),
+                    .unwrap_or_else(|| self.raw_evaluate(position)),
             )
         };
-        let mut static_eval = raw_static_eval.map(|raw| self.corrected_static_eval(board, raw));
+        let mut static_eval = raw_static_eval.map(|raw| self.corrected_static_eval(position, raw));
         let improving = static_eval.and_then(|eval| self.record_static_eval(ply, eval));
         if static_eval.is_none() {
             self.static_evals[ply] = i16::MIN;
@@ -835,7 +842,7 @@ impl SearchCore {
             && depth <= RFP_MAX_DEPTH
             && beta.abs() < MATE_SCORE - MAX_PLY as i32
         {
-            let eval = *static_eval.get_or_insert_with(|| self.raw_evaluate(board));
+            let eval = *static_eval.get_or_insert_with(|| self.raw_evaluate(position));
             static_eval = Some(eval);
             if eval - rfp_margin(depth, improving, self.rfp_margin_per_ply()) >= beta {
                 return if board.generate_moves(|_| true) {
@@ -852,9 +859,9 @@ impl SearchCore {
             && depth <= RAZOR_MAX_DEPTH
             && beta.abs() < MATE_SCORE - MAX_PLY as i32
         {
-            let eval = *static_eval.get_or_insert_with(|| self.raw_evaluate(board));
+            let eval = *static_eval.get_or_insert_with(|| self.raw_evaluate(position));
             if eval + RAZOR_MARGIN_BASE + RAZOR_MARGIN_PER_PLY * i32::from(depth) <= alpha {
-                let score = self.quiescence(board, alpha, alpha + 1, ply);
+                let score = self.quiescence(position, alpha, alpha + 1, ply);
                 if self.timed_out {
                     return 0;
                 }
@@ -875,12 +882,13 @@ impl SearchCore {
         ) {
             let probcut_beta = beta + probcut_margin;
             let mut captures = QuiescencePicker::new(board, false, self, ply);
-            while let Some((mv, see)) = captures.next() {
-                if !is_capture(board, mv) || see < 0 {
+            while let Some(picked) = captures.next() {
+                let mv = picked.mv;
+                if !picked.capture || !picked.see_good {
                     continue;
                 }
-                let child = played(board, mv);
-                self.path.push(repetition_key(&child));
+                let child = position.child(mv);
+                self.path.push(child.repetition_key());
                 let score = -self.negamax(
                     &child,
                     depth - PROBCUT_DEPTH_REDUCTION,
@@ -927,7 +935,7 @@ impl SearchCore {
             let singular_beta = tt_score - SINGULAR_MARGIN_PER_PLY * i32::from(depth);
             let exclusion_depth = (depth - 1) / 2;
             let exclusion_score = self.negamax(
-                board,
+                position,
                 exclusion_depth,
                 singular_beta - 1,
                 singular_beta,
@@ -971,17 +979,22 @@ impl SearchCore {
         let mut searched_quiets = MoveList::new();
         let mut searched_captures = MoveList::new();
 
-        while let Some((mv, picked_quiet_history)) = picker.next(self) {
+        while let Some(mv) = picker.next(self) {
             legal_moves_seen += 1;
             let move_index = index;
             index += 1;
             let capture = is_capture(board, mv);
-            let child = played(board, mv);
-            let gives_check = !child.checkers().is_empty();
+            let child_board = position.played(mv);
+            let gives_check = !child_board.checkers().is_empty();
             let quiet = !capture && mv.promotion.is_none();
             let defends_threat = quiet
-                && threat_move.is_some_and(|threat| defends_against_threat(board, &child, threat));
-            let quiet_history = if quiet { picked_quiet_history } else { 0 };
+                && threat_move
+                    .is_some_and(|threat| defends_against_threat(board, &child_board, threat));
+            let quiet_history = if quiet {
+                self.quiet_history_score(board, mv, prev_move, ply)
+            } else {
+                0
+            };
             let capture_history = if capture {
                 self.capture_history_score(board, mv)
             } else {
@@ -997,8 +1010,11 @@ impl SearchCore {
             {
                 if capture
                     && depth <= SEE_PRUNE_MAX_DEPTH
-                    && static_exchange_capture(board, mv)
-                        < capture_see_threshold(depth, capture_history)
+                    && !static_exchange_ge_capture(
+                        board,
+                        mv,
+                        capture_see_threshold(depth, capture_history),
+                    )
                 {
                     continue;
                 }
@@ -1022,12 +1038,13 @@ impl SearchCore {
                     continue;
                 }
             }
+            let child = position.child_with_board(mv, child_board);
             if quiet {
                 searched_quiets.push(mv);
             } else if capture {
                 searched_captures.push(mv);
             }
-            self.path.push(repetition_key(&child));
+            self.path.push(child.repetition_key());
             if ply < MAX_PLY {
                 // Record the move played here so descendants can read it as their
                 // 2-ply-back continuation context (see `continuation2_index`).
@@ -1153,7 +1170,7 @@ impl SearchCore {
                 && let (Some(raw_eval), Some(corrected_eval)) = (raw_static_eval, static_eval)
             {
                 self.update_correction_history(
-                    board,
+                    position,
                     raw_eval,
                     corrected_eval,
                     best_score,
@@ -1174,24 +1191,31 @@ impl SearchCore {
         best_score
     }
 
-    fn quiescence(&mut self, board: &Board, mut alpha: i32, beta: i32, ply: usize) -> i32 {
+    fn quiescence(
+        &mut self,
+        position: &SearchPosition,
+        mut alpha: i32,
+        beta: i32,
+        ply: usize,
+    ) -> i32 {
+        let board = position.board();
         self.nodes += 1;
         self.pv_len[ply.min(MAX_PLY - 1)] = 0;
         if self.expired() {
             return 0;
         }
         if ply >= MAX_PLY - 1 {
-            let raw_eval = self.raw_evaluate(board);
-            return self.corrected_static_eval(board, raw_eval);
+            let raw_eval = self.raw_evaluate(position);
+            return self.corrected_static_eval(position, raw_eval);
         }
-        if self.is_draw(board) {
+        if self.is_draw(position) {
             return 0;
         }
         if crate::kpk::probe(board) == Some(false) {
             return 0;
         }
 
-        let key = self.node_rule_key(board);
+        let key = self.node_rule_key(position);
         let original_alpha = alpha;
         let entry = self.probe(key);
         if let Some(entry) = entry
@@ -1217,8 +1241,8 @@ impl SearchCore {
         }
         let raw_stand_pat = entry
             .and_then(TTEntry::static_eval)
-            .unwrap_or_else(|| self.raw_evaluate(board));
-        let stand_pat = self.corrected_static_eval(board, raw_stand_pat);
+            .unwrap_or_else(|| self.raw_evaluate(position));
+        let stand_pat = self.corrected_static_eval(position, raw_stand_pat);
         // Fail-soft: track the best score seen so we can return a bound tighter
         // than beta/alpha. When in check we may not stand pat, so seed with -INF.
         let mut best_score = if in_check { -INF } else { stand_pat };
@@ -1241,11 +1265,12 @@ impl SearchCore {
             picker = QuiescencePicker::new(board, false, self, ply);
         }
         let mut best_move = None;
-        while let Some((mv, see)) = picker.next() {
-            let capture = is_capture(board, mv);
-            let child = played(board, mv);
-            let gives_check = !child.checkers().is_empty();
-            if !in_check && capture && mv.promotion.is_none() && !gives_check && see < 0 {
+        while let Some(picked) = picker.next() {
+            let mv = picked.mv;
+            let capture = picked.capture;
+            let child_board = position.played(mv);
+            let gives_check = !child_board.checkers().is_empty();
+            if !in_check && capture && mv.promotion.is_none() && !gives_check && !picked.see_good {
                 continue;
             }
             if !in_check
@@ -1257,7 +1282,8 @@ impl SearchCore {
             {
                 continue;
             }
-            self.path.push(repetition_key(&child));
+            let child = position.child_with_board(mv, child_board);
+            self.path.push(child.repetition_key());
             let score = -self.quiescence(&child, -beta, -alpha, ply + 1);
             self.path.pop();
             if self.timed_out {
@@ -1299,23 +1325,21 @@ impl SearchCore {
         best_score
     }
 
-    /// The current node's `repetition_key`, read from the search path stack when
-    /// available (the parent already computed and pushed it) instead of rehashing.
-    fn node_repetition_key(&self, board: &Board) -> u64 {
-        let key = self
-            .path
-            .last()
-            .copied()
-            .unwrap_or_else(|| repetition_key(board));
-        debug_assert_eq!(key, repetition_key(board));
+    fn node_repetition_key(&self, position: &SearchPosition) -> u64 {
+        let key = position.repetition_key();
+        debug_assert_eq!(self.path.last().copied(), Some(key));
         key
     }
 
-    fn node_rule_key(&self, board: &Board) -> u64 {
-        rule_key_from(self.node_repetition_key(board), board.halfmove_clock())
+    fn node_rule_key(&self, position: &SearchPosition) -> u64 {
+        rule_key_from(
+            self.node_repetition_key(position),
+            position.board().halfmove_clock(),
+        )
     }
 
-    fn is_draw(&self, board: &Board) -> bool {
+    fn is_draw(&self, position: &SearchPosition) -> bool {
+        let board = position.board();
         if board.halfmove_clock() >= 100 || insufficient_material(board) {
             return true;
         }
@@ -1325,25 +1349,36 @@ impl SearchCore {
         if board.halfmove_clock() < 4 {
             return false;
         }
-        let current = self.node_repetition_key(board);
+        let current = self.node_repetition_key(position);
         // A null move is a search heuristic, not a legal move. Positions from
         // real game history or the pre-null search path therefore cannot
         // contribute to a repetition claim inside that synthetic subtree.
-        let prior_matches = if self.null_boundary.is_none() {
-            self.prior_positions
-                .iter()
-                .filter(|key| **key == current)
-                .count()
-        } else {
-            0
-        };
+        let current_index = self.path.len() - 1;
         let path_start = self.null_boundary.unwrap_or(0);
-        prior_matches
-            + self.path[path_start..]
-                .iter()
-                .filter(|key| **key == current)
-                .count()
-            >= 3
+        let mut matches = 0;
+        for distance in (0..=usize::from(board.halfmove_clock())).step_by(2) {
+            let candidate = if let Some(index) = current_index.checked_sub(distance)
+                && index >= path_start
+            {
+                self.path.get(index)
+            } else if self.null_boundary.is_none() && distance > current_index {
+                let before_root = distance - current_index;
+                self.prior_positions
+                    .len()
+                    .checked_sub(before_root)
+                    .and_then(|index| self.prior_positions.get(index))
+            } else {
+                None
+            };
+            let Some(candidate) = candidate else { break };
+            if *candidate == current {
+                matches += 1;
+                if matches >= 3 {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn expired(&mut self) -> bool {
@@ -1731,7 +1766,7 @@ fn defends_against_threat(board: &Board, child: &Board, threat: Move) -> bool {
         return true;
     }
     is_capture(&null_board, threat)
-        && (!is_capture(child, threat) || static_exchange_capture(child, threat) < 0)
+        && (!is_capture(child, threat) || !static_exchange_ge_capture(child, threat, 0))
 }
 
 fn should_probcut(
@@ -1787,12 +1822,13 @@ mod tests {
             .parse::<Board>()
             .unwrap();
         let mut search = SearchCore::new();
-        search.path.push(repetition_key(&board));
+        let position = SearchPosition::from_board(&board);
+        search.path.push(position.repetition_key());
 
-        let first = search.quiescence(&board, -INF, INF, 0);
+        let first = search.quiescence(&position, -INF, INF, 0);
         let first_nodes = search.nodes;
         search.nodes = 0;
-        let second = search.quiescence(&board, -INF, INF, 0);
+        let second = search.quiescence(&position, -INF, INF, 0);
 
         assert!(first_nodes > 1);
         assert_eq!(second, first);
@@ -1807,9 +1843,14 @@ mod tests {
         ] {
             let board = fen.parse::<Board>().unwrap();
             let mut search = SearchCore::new();
-            search.path.push(repetition_key(&board));
+            let position = SearchPosition::from_board(&board);
+            search.path.push(position.repetition_key());
 
-            assert_eq!(search.quiescence(&board, -INF, INF, 0), expected, "{fen}");
+            assert_eq!(
+                search.quiescence(&position, -INF, INF, 0),
+                expected,
+                "{fen}"
+            );
         }
     }
 
@@ -1974,10 +2015,11 @@ mod tests {
     fn deep_null_fail_high_runs_a_real_verification_search() {
         let board = Board::default();
         let mut search = SearchCore::new();
-        search.path.push(repetition_key(&board));
+        let position = SearchPosition::from_board(&board);
+        search.path.push(position.repetition_key());
 
         search.negamax(
-            &board, 11, -1_001, -1_000, 0, false, true, 0, None, None, None,
+            &position, 11, -1_001, -1_000, 0, false, true, 0, None, None, None,
         );
 
         assert!(search.null_verifications > 0);
@@ -1993,8 +2035,9 @@ mod tests {
 
         let board = "7k/3q4/8/8/8/8/3R4/7K w - - 0 1".parse::<Board>().unwrap();
         let mut search = SearchCore::new();
-        search.path.push(repetition_key(&board));
-        let score = search.negamax(&board, 6, 99, 100, 0, false, true, 0, None, None, None);
+        let position = SearchPosition::from_board(&board);
+        search.path.push(position.repetition_key());
+        let score = search.negamax(&position, 6, 99, 100, 0, false, true, 0, None, None, None);
 
         assert!(score >= 100 + PROBCUT_MARGIN);
         assert!(search.probcut_cutoffs > 0);
@@ -2044,10 +2087,11 @@ mod tests {
         search.path.push(repetition_key(&Board::default()));
         search.null_boundary = Some(search.path.len());
         search.path.push(key);
+        let position = SearchPosition::from_board(&board);
 
-        assert!(!search.is_draw(&board));
+        assert!(!search.is_draw(&position));
         search.null_boundary = None;
-        assert!(search.is_draw(&board));
+        assert!(search.is_draw(&position));
     }
 
     #[test]
@@ -2056,10 +2100,11 @@ mod tests {
         // only the captured rook makes delta pruning miss the new queen.
         let board = "k5nr/6P1/2K5/8/8/8/8/8 w - - 0 1".parse::<Board>().unwrap();
         let mut search = SearchCore::new();
-        search.path.push(repetition_key(&board));
+        let position = SearchPosition::from_board(&board);
+        search.path.push(position.repetition_key());
         let alpha = 400;
 
-        assert!(search.quiescence(&board, alpha, 1_000, 0) > alpha);
+        assert!(search.quiescence(&position, alpha, 1_000, 0) > alpha);
     }
 
     #[test]
@@ -2068,13 +2113,14 @@ mod tests {
         // two flight squares are covered by White's king.
         let board = "7k/5K1n/8/8/8/8/8/7R b - - 0 1".parse::<Board>().unwrap();
         let mut search = SearchCore::new();
-        search.path.push(repetition_key(&board));
+        let position = SearchPosition::from_board(&board);
+        search.path.push(position.repetition_key());
 
         assert!(legal_moves(&board).is_empty());
         assert!(board.checkers().is_empty());
         assert_eq!(
             search.negamax(
-                &board, 3, -1_001, -1_000, 0, false, true, 0, None, None, None,
+                &position, 3, -1_001, -1_000, 0, false, true, 0, None, None, None,
             ),
             0
         );

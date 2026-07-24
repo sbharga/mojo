@@ -23,7 +23,7 @@ jobs:
       - run: cargo clippy --manifest-path engine/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path engine/Cargo.toml
       - run: npm ci --prefix web
-      - run: cargo install wasm-pack --locked
+      - run: cargo install wasm-pack --version 0.15.0 --locked
       - run: npm run build --prefix web
       - run: npm run check --prefix web
       - run: cargo install twiggy --locked
