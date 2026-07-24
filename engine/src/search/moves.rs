@@ -59,8 +59,9 @@ fn capture_targets(board: &Board) -> BitBoard {
 }
 
 pub(crate) fn played(board: &Board, mv: Move) -> Board {
+    debug_assert!(board.is_legal(mv));
     let mut next = board.clone();
-    next.play(mv);
+    next.play_unchecked(mv);
     next
 }
 

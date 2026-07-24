@@ -38,7 +38,7 @@ analysis reference.
 ## Getting started
 
 Prerequisites: a Rust toolchain with the `wasm32-unknown-unknown` target,
-[`wasm-pack`](https://rustwasm.github.io/wasm-pack/) on your `PATH`, and Node.js
+[`wasm-pack` 0.15.0](https://wasm-bindgen.github.io/wasm-pack/) on your `PATH`, and Node.js
 24 (the version used by CI).
 
 All web `npm` scripts run from `web/`. Use `npm ci` for a reproducible install;
@@ -75,6 +75,10 @@ The full validation gate (mirrors CI) runs from `web/`:
 ```sh
 npm run check    # lint + tsc + vitest + openings + strength + cancellation + seeding + size + selfplay
 ```
+
+Both baseline and SIMD engine Wasm files have a hard gzip limit of **250 kB
+(250,000 bytes)**. This ceiling is fixed and must not be raised or otherwise
+changed.
 
 The app uses `SharedArrayBuffer` for prompt search cancellation. The Vite
 configuration supplies the required cross-origin isolation headers locally;
