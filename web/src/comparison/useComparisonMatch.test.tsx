@@ -34,7 +34,7 @@ const configuration: MatchConfiguration = {
   baseline: version('baseline'),
   candidate: version('candidate'),
   games: 4,
-  depth: 3,
+  moveTimeMs: 100,
   maxPlies: 200,
 }
 
@@ -56,6 +56,10 @@ function game(pairIndex: number, gameIndex: number): GameResult {
     reason: 'rules draw',
     plies: 20,
     pgn: '',
+    baselineDepth: 4,
+    candidateDepth: 4,
+    baselineMs: 100,
+    candidateMs: 100,
   }
 }
 
@@ -74,6 +78,7 @@ describe('useComparisonMatch', () => {
 
     expect(WorkerStub.instances).toHaveLength(2)
     const [first, second] = WorkerStub.instances
+    expect(first.posted[0]).toMatchObject({ type: 'initialize', moveTimeMs: 100, maxPlies: 200 })
     act(() => {
       first.emit({ type: 'ready', runId: 1 })
       second.emit({ type: 'ready', runId: 1 })
@@ -94,6 +99,7 @@ describe('useComparisonMatch', () => {
     expect(result.current.games.map((entry) => entry.gameIndex)).toEqual([0, 1, 2, 3])
     expect(result.current.summary).toMatchObject({ draws: 4, completedPairs: 2 })
     expect(result.current.exportData?.status).toBe('completed')
+    expect(result.current.exportData?.concurrency).toEqual({ workers: 2, hardwareConcurrency: 3 })
     expect(WorkerStub.instances.every((worker) => worker.terminated)).toBe(true)
   })
 

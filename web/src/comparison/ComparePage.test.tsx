@@ -44,7 +44,7 @@ afterEach(() => {
 })
 
 describe('ComparePage', () => {
-  it('loads newest commits by default and starts a fixed-depth paired match', async () => {
+  it('loads newest commits by default and starts a fixed-time paired match', async () => {
     const user = userEvent.setup()
     render(<ComparePage />)
 
@@ -58,7 +58,7 @@ describe('ComparePage', () => {
         baseline: expect.objectContaining({ sha: 'baseline' }),
         candidate: expect.objectContaining({ sha: 'candidate' }),
         games: 100,
-        depth: 5,
+        moveTimeMs: 100,
         maxPlies: 200,
       }),
       [{ name: 'Opening', fen: 'fen' }],
@@ -78,5 +78,21 @@ describe('ComparePage', () => {
     await user.clear(screen.getByLabelText('Total games'))
     await user.type(screen.getByLabelText('Total games'), '3')
     await waitFor(() => expect(screen.getByRole('button', { name: 'Start match' })).toHaveProperty('disabled', true))
+  })
+
+  it('requires a move time between 10 and 5000 ms', async () => {
+    const user = userEvent.setup()
+    render(<ComparePage />)
+    await screen.findAllByRole('option', { name: /Candidate/ })
+
+    await user.clear(screen.getByLabelText('Move time'))
+    await user.type(screen.getByLabelText('Move time'), '5')
+    expect(screen.getByText('Choose a move time from 10 to 5000 ms.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Start match' })).toHaveProperty('disabled', true)
+
+    await user.clear(screen.getByLabelText('Move time'))
+    await user.type(screen.getByLabelText('Move time'), '6000')
+    expect(screen.getByText('Choose a move time from 10 to 5000 ms.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Start match' })).toHaveProperty('disabled', true)
   })
 })

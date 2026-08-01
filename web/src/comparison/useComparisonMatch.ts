@@ -41,6 +41,7 @@ export function useComparisonMatch() {
   const [state, setState] = useState<MatchState>(initialState)
   const workers = useRef<Worker[]>([])
   const runId = useRef(0)
+  const concurrency = useRef({ workers: 0, hardwareConcurrency: 0 })
 
   const terminate = useCallback(() => {
     workers.current.forEach((worker) => worker.terminate())
@@ -82,6 +83,7 @@ export function useComparisonMatch() {
     let stopped = false
     const hardwareWorkers = Math.max(1, (navigator.hardwareConcurrency ?? 2) - 1)
     const workerCount = Math.min(4, hardwareWorkers, selectedOpenings.length)
+    concurrency.current = { workers: workerCount, hardwareConcurrency: navigator.hardwareConcurrency ?? 0 }
 
     const fail = (message: string) => {
       if (stopped || currentRun !== runId.current) return
@@ -148,7 +150,7 @@ export function useComparisonMatch() {
         candidateModuleUrl: moduleUrl(configuration.candidate),
         baselineLabel: `${configuration.baseline.shortSha} ${configuration.baseline.subject}`,
         candidateLabel: `${configuration.candidate.shortSha} ${configuration.candidate.subject}`,
-        depth: configuration.depth,
+        moveTimeMs: configuration.moveTimeMs,
         maxPlies: configuration.maxPlies,
       })
       return worker
@@ -164,6 +166,7 @@ export function useComparisonMatch() {
         configuration: state.configuration,
         summary: state.summary,
         games: state.games,
+        concurrency: concurrency.current,
         ...(state.error ? { error: state.error } : {}),
       }
     : null

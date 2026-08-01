@@ -46,7 +46,7 @@ export function ComparePage({ onRunningChange }: ComparePageProps) {
   const [baselineSha, setBaselineSha] = useState('')
   const [candidateSha, setCandidateSha] = useState('')
   const [games, setGames] = useState(100)
-  const [depth, setDepth] = useState(5)
+  const [moveTimeMs, setMoveTimeMs] = useState(100)
   const [clock, setClock] = useState(Date.now)
   const match = useComparisonMatch()
 
@@ -99,11 +99,11 @@ export function ComparePage({ onRunningChange }: ComparePageProps) {
   const configuration = useMemo<MatchConfiguration | null>(() => {
     const baseline = manifest?.versions.find((version) => version.sha === baselineSha)
     const candidate = manifest?.versions.find((version) => version.sha === candidateSha)
-    return baseline && candidate ? { baseline, candidate, games, depth, maxPlies: 200 } : null
-  }, [baselineSha, candidateSha, depth, games, manifest])
+    return baseline && candidate ? { baseline, candidate, games, moveTimeMs, maxPlies: 200 } : null
+  }, [baselineSha, candidateSha, moveTimeMs, games, manifest])
   const validGames = Number.isInteger(games) && games >= 2 && games <= 1000 && games % 2 === 0
-  const validDepth = Number.isInteger(depth) && depth >= 1 && depth <= 6
-  const valid = configuration !== null && baselineSha !== candidateSha && validGames && validDepth
+  const validMoveTime = Number.isInteger(moveTimeMs) && moveTimeMs >= 10 && moveTimeMs <= 5000
+  const valid = configuration !== null && baselineSha !== candidateSha && validGames && validMoveTime
   const activeGames = match.configuration?.games ?? games
   const elapsed = match.startedAt
     ? Math.max(0, Math.round(((match.finishedAt ? Date.parse(match.finishedAt) : clock) - Date.parse(match.startedAt)) / 1000))
@@ -120,19 +120,19 @@ export function ComparePage({ onRunningChange }: ComparePageProps) {
 
     <section className="compare-layout">
       <form className="panel compare-setup" onSubmit={(event) => { event.preventDefault(); if (valid && configuration) match.start(configuration, openings) }}>
-        <div className="panel__heading">Match setup <small>Baseline Wasm · fixed depth</small></div>
+        <div className="panel__heading">Match setup <small>Baseline Wasm · fixed time per move</small></div>
         <div className="compare-form">
           {loadError && <p className="error-message" role="alert">{loadError}</p>}
           <label>Baseline commit<select aria-label="Baseline commit" value={baselineSha} disabled={match.isRunning || !manifest} onChange={(event) => setBaselineSha(event.target.value)}>{manifest?.versions.map((version) => <option key={version.sha} value={version.sha}>{versionLabel(version)}</option>)}</select></label>
           <label>Candidate commit<select aria-label="Candidate commit" value={candidateSha} disabled={match.isRunning || !manifest} onChange={(event) => setCandidateSha(event.target.value)}>{manifest?.versions.map((version) => <option key={version.sha} value={version.sha}>{versionLabel(version)}</option>)}</select></label>
           <div className="compare-fields">
             <label>Total games<input aria-label="Total games" type="number" min="2" max="1000" step="2" value={games} disabled={match.isRunning} onChange={(event) => setGames(Number(event.target.value))} /></label>
-            <label>Search depth<input aria-label="Search depth" type="number" min="1" max="6" value={depth} disabled={match.isRunning} onChange={(event) => setDepth(Number(event.target.value))} /></label>
+            <label>Move time (ms)<input aria-label="Move time" type="number" min="10" max="5000" step="10" value={moveTimeMs} disabled={match.isRunning} onChange={(event) => setMoveTimeMs(Number(event.target.value))} /></label>
           </div>
           {baselineSha === candidateSha && <p className="field-error">Choose two different commits.</p>}
           {!validGames && <p className="field-error">Choose an even number from 2 to 1000 games.</p>}
-          {!validDepth && <p className="field-error">Choose a search depth from 1 to 6.</p>}
-          <p className="setting-note">Each opening is played twice with colors swapped. Runs stay local and stop when this page closes.</p>
+          {!validMoveTime && <p className="field-error">Choose a move time from 10 to 5000 ms.</p>}
+          <p className="setting-note">Each opening is played twice with colors swapped. Searches are wall-clock bound and up to 4 games run in parallel, so very short budgets — and older engine builds, which poll the clock less often — may overshoot slightly. Runs stay local and stop when this page closes.</p>
           <div className="compare-actions">{match.isRunning ? <button type="button" className="danger" onClick={match.cancel}>Cancel match</button> : <button type="submit" className="primary" disabled={!valid || openings.length === 0}>Start match</button>}</div>
         </div>
       </form>
@@ -153,7 +153,7 @@ export function ComparePage({ onRunningChange }: ComparePageProps) {
 
     <section className="panel game-log">
       <div className="panel__heading">Game log <small>{match.games.length} completed</small></div>
-      <div className="game-table-wrap"><table><thead><tr><th>#</th><th>Opening</th><th>Candidate</th><th>Result</th><th>Reason</th><th>Plies</th></tr></thead><tbody>{match.games.map((game) => <tr key={game.gameIndex}><td>{game.gameIndex + 1}</td><td>{game.opening}</td><td>{game.candidateColor}</td><td>{game.result}</td><td>{game.reason}</td><td>{game.plies}</td></tr>)}</tbody></table>{match.games.length === 0 && <p className="empty">Configure and start a match to see individual games.</p>}</div>
+      <div className="game-table-wrap"><table><thead><tr><th>#</th><th>Opening</th><th>Candidate</th><th>Result</th><th>Reason</th><th>Plies</th><th>Depth b/c</th></tr></thead><tbody>{match.games.map((game) => <tr key={game.gameIndex}><td>{game.gameIndex + 1}</td><td>{game.opening}</td><td>{game.candidateColor}</td><td>{game.result}</td><td>{game.reason}</td><td>{game.plies}</td><td>{game.baselineDepth.toFixed(1)} / {game.candidateDepth.toFixed(1)}</td></tr>)}</tbody></table>{match.games.length === 0 && <p className="empty">Configure and start a match to see individual games.</p>}</div>
     </section>
   </main>
 }

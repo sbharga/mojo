@@ -25,6 +25,10 @@ function result(pairIndex: number, candidateScore: GameResult['candidateScore'])
     reason: 'maximum plies',
     plies: 1,
     pgn: '',
+    baselineDepth: 0,
+    candidateDepth: 0,
+    baselineMs: 0,
+    candidateMs: 0,
   }
 }
 
@@ -72,8 +76,43 @@ describe('playGame', () => {
       opening: { name: 'Mate', fen: '7k/6Q1/6K1/8/8/8/8/8 b - - 0 1' },
       pairIndex: 0,
       gameIndex: 0,
-      rules: { depth: 1, maxPlies: 200 },
+      rules: { moveTimeMs: 50, maxPlies: 200 },
     })
     expect(game).toMatchObject({ winner: 'white', candidateScore: 0, result: '1-0', reason: 'checkmate' })
+  })
+
+  it('deepens against the move-time budget and tolerates historical result shapes', () => {
+    const budgets: number[] = []
+    class TimedEngine implements HistoricalEngine {
+      whiteToMove = true
+      set_position(fen: string) { this.whiteToMove = fen.split(' ')[1] === 'w' }
+      analyze_depth(_depth: number, _multiPv: number, timeLimitMs: number) {
+        budgets.push(timeLimitMs)
+        // Historical (pre soft-time-fraction) shape: only `timed_out` and `lines`.
+        return { timed_out: false, lines: [{ score_cp: 10, moves: [this.whiteToMove ? 'e2e4' : 'e7e5'] }] }
+      }
+
+      fallback_move() { return undefined }
+      free() {}
+    }
+    const game = playGame({
+      Baseline: TimedEngine,
+      Candidate: TimedEngine,
+      baselineLabel: 'base',
+      candidateLabel: 'candidate',
+      candidateColor: 'white',
+      opening: { name: 'Start', fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1' },
+      pairIndex: 0,
+      gameIndex: 0,
+      rules: { moveTimeMs: 50, maxPlies: 2 },
+    })
+    // Old builds default to a 0.5 soft-time fraction with no next-iteration
+    // prediction, so the loop keeps deepening past the halfway point of the
+    // budget until analyze_depth reports a timeout (never, here) or the
+    // search hits MAX_SEARCH_DEPTH.
+    expect(budgets.length).toBeGreaterThan(2)
+    expect(budgets.every((budget) => budget > 0)).toBe(true)
+    expect(game.candidateDepth).toBeGreaterThan(0)
+    expect(game.baselineDepth).toBeGreaterThan(0)
   })
 })

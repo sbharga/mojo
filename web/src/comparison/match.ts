@@ -1,4 +1,5 @@
 import { Chess, type Square } from 'chess.js'
+import { MAX_SEARCH_DEPTH, iterationBudget, shouldStopBeforeNextIteration } from '../engine/searchControl'
 import type { Color, GameResult, MatchSummary, Opening, Winner } from './types'
 
 export interface AnalysisLineLike {
@@ -8,7 +9,12 @@ export interface AnalysisLineLike {
 }
 
 interface AnalysisLike {
+  depth?: number
   timed_out?: boolean
+  partial?: boolean
+  soft_time_fraction?: number
+  predicted_next_ms?: number
+  ebf_gate_override?: boolean
   lines?: AnalysisLineLike[]
 }
 
@@ -24,7 +30,7 @@ export interface HistoricalEngineConstructor {
 }
 
 export interface MatchRules {
-  depth: number
+  moveTimeMs: number
   maxPlies: number
   winScoreCp?: number
   winPlies?: number
@@ -54,18 +60,35 @@ function gamePly(game: Chess) {
   return (fullmove - 1) * 2 + (game.turn() === 'b' ? 1 : 0)
 }
 
-function search(engine: HistoricalEngine, fen: string, priorFens: string[], depth: number) {
+function search(engine: HistoricalEngine, fen: string, priorFens: string[], moveTimeMs: number) {
   engine.set_position(fen, priorFens)
+  const started = performance.now()
   let completed: AnalysisLike | undefined
-  for (let currentDepth = 1; currentDepth <= depth; currentDepth += 1) {
-    const result = engine.analyze_depth(currentDepth, 1, 60_000)
-    if (!result.timed_out && result.lines?.length) completed = result
+  let completedDepth = 0
+  for (let depth = 1; depth <= MAX_SEARCH_DEPTH; depth += 1) {
+    const remaining = moveTimeMs - (performance.now() - started)
+    if (remaining <= 0 && completed) break
+    const result = engine.analyze_depth(depth, 1, iterationBudget(remaining))
+    const reachedDepth = result.depth ?? depth
+    const usable = (result.lines?.length ?? 0) > 0 && (!result.timed_out || (result.partial ?? false))
+    if (usable && reachedDepth >= completedDepth) {
+      completed = result
+      completedDepth = reachedDepth
+    }
     if (result.timed_out) break
+    if (shouldStopBeforeNextIteration({
+      elapsedMs: performance.now() - started,
+      thinkTimeMs: moveTimeMs,
+      softTimeFraction: result.soft_time_fraction ?? 0.5,
+      predictedNextMs: result.predicted_next_ms ?? 0,
+      ebfGateOverride: result.ebf_gate_override ?? false,
+      multiPv: 1,
+    })) break
   }
   const line = completed?.lines?.[0]
   const move = line?.moves[0] ?? engine.fallback_move()
   if (!move) throw new Error(`Engine found no move in non-terminal position ${fen}`)
-  return { line, move }
+  return { line, move, depth: completedDepth, elapsedMs: performance.now() - started }
 }
 
 function whiteScore(line: AnalysisLineLike | undefined, turn: 'w' | 'b') {
@@ -139,6 +162,12 @@ export function playGame(args: {
   let reason: GameResult['reason'] = 'maximum plies'
   let winner: Winner = null
   let playedPlies = gamePly(game)
+  let baselineDepthSum = 0
+  let baselineMoves = 0
+  let baselineMs = 0
+  let candidateDepthSum = 0
+  let candidateMoves = 0
+  let candidateMs = 0
 
   game.header(
     'Event', 'Mojo commit comparison',
@@ -153,7 +182,16 @@ export function playGame(args: {
       const fen = game.fen()
       const turn = game.turn()
       const actor = turn === 'w' ? white : black
-      const { line, move } = search(actor, fen, priorFens, rules.depth)
+      const { line, move, depth, elapsedMs } = search(actor, fen, priorFens, rules.moveTimeMs)
+      if (actor === baseline) {
+        baselineDepthSum += depth
+        baselineMoves += 1
+        baselineMs += elapsedMs
+      } else {
+        candidateDepthSum += depth
+        candidateMoves += 1
+        candidateMs += elapsedMs
+      }
       const evaluation = whiteScore(line, turn)
 
       if (evaluation !== undefined && evaluation >= rules.winScoreCp) {
@@ -208,6 +246,10 @@ export function playGame(args: {
       reason,
       plies: playedPlies,
       pgn: game.pgn({ maxWidth: 80, newline: '\n' }),
+      baselineDepth: baselineMoves ? Math.round((baselineDepthSum / baselineMoves) * 10) / 10 : 0,
+      candidateDepth: candidateMoves ? Math.round((candidateDepthSum / candidateMoves) * 10) / 10 : 0,
+      baselineMs: Math.round(baselineMs),
+      candidateMs: Math.round(candidateMs),
     }
   } finally {
     baseline.free()
