@@ -36,6 +36,7 @@ declare module "../../../engine/pkg/mojo_engine.js" {
     clock_check_interval: number;
     elapsed_ms: number;
     timed_out: boolean;
+    partial: boolean;
     lines: AnalysisLine[];
   }
 }

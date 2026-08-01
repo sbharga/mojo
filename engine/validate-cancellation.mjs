@@ -23,10 +23,17 @@ if (!cancelled.timed_out || cancelled.nodes > cancelled.clock_check_interval * 2
     `Shared cancellation was not observed promptly: ${cancelled.nodes} nodes, interval ${cancelled.clock_check_interval}`,
   )
 }
+// A real cancellation (as opposed to a deadline) must never surface a
+// partial line: the caller is discarding this search because the position
+// it was for is already stale.
+if (cancelled.partial || cancelled.lines.length > 0) {
+  throw new Error('A cancelled search surfaced a partial line instead of yielding nothing')
+}
 
 console.log({
   stale_watermark_ignored: true,
   cancellation_observed: true,
+  cancelled_yields_no_partial: true,
   nodes: cancelled.nodes,
   clock_check_interval: cancelled.clock_check_interval,
 })

@@ -19,6 +19,7 @@ const result: Analysis = {
   clock_check_interval: 256,
   elapsed_ms: 10,
   timed_out: false,
+  partial: false,
   lines: [{ score_cp: 20, moves: ["e2e4", "e7e5"] }],
 };
 
@@ -51,6 +52,7 @@ describe("analysis roots", () => {
       clock_check_interval: engineResult.clock_check_interval,
       elapsed_ms: engineResult.elapsed_ms,
       timed_out: engineResult.timed_out,
+      partial: engineResult.partial,
       lines: engineResult.lines,
     };
 

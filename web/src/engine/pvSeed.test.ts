@@ -16,6 +16,7 @@ function analysis(overrides: Partial<Analysis> = {}): Analysis {
     clock_check_interval: 256,
     elapsed_ms: 20,
     timed_out: false,
+    partial: false,
     lines: [{ score_cp: 30, moves: ["e2e4", "e7e5", "g1f3"] }],
     ...overrides,
   };

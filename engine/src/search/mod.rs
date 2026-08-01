@@ -1,8 +1,10 @@
 //! Iterative-deepening alpha-beta search core: negamax/quiescence, the
 //! transposition table lifecycle, and the search-tuning constants that
 //! govern pruning/reduction. Move ordering lives in [`ordering`], SEE in
-//! [`see`], and generic move/position utilities in [`moves`].
+//! [`see`], check detection in [`checks`], and generic move/position
+//! utilities in [`moves`].
 
+mod checks;
 mod correction;
 mod moves;
 mod ordering;
@@ -23,6 +25,7 @@ pub(crate) use moves::legal_moves;
 #[cfg(test)]
 pub(crate) use moves::played;
 
+use checks::{CheckContext, gives_check};
 use moves::{
     captured_value_for_capture, decode_move, encode_move, is_capture, repetition_key, rule_key,
     rule_key_from,
@@ -155,7 +158,10 @@ type MoveList = ArrayVec<Move, MAX_MOVES>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SingularOutcome {
-    Extend,
+    /// The TT move is singular: extend it by the given number of plies (1,
+    /// or 2 when the exclusion search fell drastically short of
+    /// `singular_beta`), bounded by the remaining extension budget.
+    Extend(i16),
     MultiCut,
     Reduce,
     None,
@@ -194,6 +200,10 @@ pub(crate) struct SearchResult {
     pub(crate) ebf_gate_override: bool,
     pub(crate) clock_check_interval: u32,
     pub(crate) timed_out: bool,
+    /// A timed-out result whose line still reflects a fully searched (not
+    /// merely aborted mid-move) iteration at a shallower effective depth. See
+    /// [`SearchCore::analyze_depth`].
+    pub(crate) partial: bool,
     pub(crate) lines: Vec<SearchLine>,
 }
 
@@ -235,6 +245,7 @@ pub(crate) struct SearchCore {
     #[cfg(target_arch = "wasm32")]
     stop_request_id: i32,
     timed_out: bool,
+    cancelled: bool,
     #[cfg(feature = "spsa")]
     parameters: SearchParameters,
     #[cfg(test)]
@@ -252,7 +263,10 @@ impl SearchCore {
         crate::kpk::initialize();
         debug_assert_eq!(std::mem::size_of::<TTEntry>(), 16);
         debug_assert_eq!(std::mem::size_of::<TTBucket>(), 64);
-        debug_assert_eq!(TT_ENTRIES * std::mem::size_of::<TTEntry>(), 2 * 1024 * 1024);
+        debug_assert_eq!(
+            TT_ENTRIES * std::mem::size_of::<TTEntry>(),
+            16 * 1024 * 1024
+        );
         Self {
             table: vec![TTBucket::default(); TT_BUCKETS].into_boxed_slice(),
             killers: [[None; 2]; MAX_PLY],
@@ -293,6 +307,7 @@ impl SearchCore {
             #[cfg(target_arch = "wasm32")]
             stop_request_id: i32::MAX,
             timed_out: false,
+            cancelled: false,
             #[cfg(feature = "spsa")]
             parameters: SearchParameters::default(),
             #[cfg(test)]
@@ -447,6 +462,7 @@ impl SearchCore {
         self.nodes = 0;
         self.next_clock_check = self.clock_check_interval;
         self.timed_out = false;
+        self.cancelled = false;
         #[cfg(test)]
         {
             self.aspiration_retries = 0;
@@ -467,11 +483,13 @@ impl SearchCore {
                 ebf_gate_override: false,
                 clock_check_interval: self.clock_check_interval as u32,
                 timed_out: false,
+                partial: false,
                 lines: Vec::new(),
             };
         }
         let mut excluded = MoveList::new();
         let mut lines = Vec::new();
+        let mut partial = false;
 
         for pv_index in 0..multi_pv.clamp(1, 5) as usize {
             let previous = self.previous_scores.get(pv_index).copied();
@@ -507,10 +525,25 @@ impl SearchCore {
                 (alpha, beta, delta) =
                     widen_aspiration(alpha, beta, score, delta, retries, failure);
             }
-            let Some(line) = line else { break };
             if self.timed_out {
+                // A completed-but-unfinished-iteration line is sound to play: every
+                // fully searched root move is exact/lower-bounded, exactly as it
+                // would be had the clock allowed the iteration to finish normally.
+                // A fail-low relative to the aspiration window it was searched
+                // under is excluded — that only tells us the previous best move
+                // looks worse, not what the actual best move is.
+                if pv_index == 0
+                    && multi_pv == 1
+                    && !self.cancelled
+                    && let Some(result) = &line
+                    && result.score > alpha
+                {
+                    lines.push(line.take().expect("checked Some above"));
+                    partial = true;
+                }
                 break;
             }
+            let Some(line) = line else { break };
             if let Some(first) = line.moves.first().copied() {
                 excluded.push(first);
             }
@@ -544,6 +577,7 @@ impl SearchCore {
             ebf_gate_override,
             clock_check_interval: self.clock_check_interval as u32,
             timed_out: self.timed_out,
+            partial,
             lines,
         }
     }
@@ -881,8 +915,8 @@ impl SearchCore {
             probcut_margin,
         ) {
             let probcut_beta = beta + probcut_margin;
-            let mut captures = QuiescencePicker::new(board, false, self, ply);
-            while let Some(picked) = captures.next() {
+            let mut captures = QuiescencePicker::new(board, false, self, ply, None);
+            while let Some(picked) = captures.next(board) {
                 let mv = picked.mv;
                 if !picked.capture || !picked.see_good {
                     continue;
@@ -926,6 +960,7 @@ impl SearchCore {
         }
 
         let mut singular_move = None;
+        let mut singular_extend_amount: i16 = 0;
         let mut negative_extension_move = None;
         if let (Some(entry), Some(tt_move)) = (entry, tt_best)
             && next_extensions < MAX_CHECK_EXTENSIONS
@@ -950,8 +985,11 @@ impl SearchCore {
             if self.timed_out {
                 return 0;
             }
-            match singular_outcome(exclusion_score, singular_beta, tt_score, beta) {
-                SingularOutcome::Extend => singular_move = Some(tt_move),
+            match singular_outcome(exclusion_score, singular_beta, tt_score, beta, depth) {
+                SingularOutcome::Extend(amount) => {
+                    singular_move = Some(tt_move);
+                    singular_extend_amount = amount;
+                }
                 SingularOutcome::MultiCut => return singular_beta,
                 SingularOutcome::Reduce => negative_extension_move = Some(tt_move),
                 SingularOutcome::None => {}
@@ -962,6 +1000,19 @@ impl SearchCore {
             prev_move.and_then(|p| decode_move(self.countermove[p.from as usize][p.to as usize]));
         let cut_node = !pv_node && beta == alpha + 1;
         let tt_move_capture = tt_best.is_some_and(|mv| is_capture(board, mv));
+        // Precompute the threat-defense prelude once per node instead of once
+        // per quiet move: both the null-move board and whether the threat is
+        // even still legal from it depend only on `board`/`threat_move`, not
+        // on the move under consideration. `board.null_move()` is `Some` here
+        // whenever `threat_move` is `Some`, since a threat is only recorded
+        // when null-move pruning ran, which requires `!in_check`.
+        let threat_context = threat_move.and_then(|threat| {
+            let null_board = board.null_move()?;
+            null_board.is_legal(threat).then_some((null_board, threat))
+        });
+        // Also precomputed once per node: the enemy-king attack facts every
+        // move's `gives_check` test reads (see `checks::CheckContext`).
+        let check_context = CheckContext::new(board);
         let mut picker = MovePicker::new(
             board,
             tt_best,
@@ -984,12 +1035,25 @@ impl SearchCore {
             let move_index = index;
             index += 1;
             let capture = is_capture(board, mv);
-            let child_board = position.played(mv);
-            let gives_check = !child_board.checkers().is_empty();
             let quiet = !capture && mv.promotion.is_none();
+            let move_gives_check = gives_check(&check_context, board, mv);
+            debug_assert_eq!(
+                move_gives_check,
+                !position.played(mv).checkers().is_empty(),
+                "gives_check fast path diverged for {mv} at {board}",
+            );
+            // `defends_against_threat` needs the played child to test
+            // `is_legal`/SEE against the threat, so only pay for the move
+            // here when a threat is actually live and the move is quiet —
+            // the pruning block below never asks about `defends_threat` for
+            // captures or promotions. Every other move defers `played`
+            // until after pruning has had a chance to skip it entirely.
+            let mut child_board_cache: Option<Board> = None;
             let defends_threat = quiet
-                && threat_move
-                    .is_some_and(|threat| defends_against_threat(board, &child_board, threat));
+                && threat_context.as_ref().is_some_and(|(null_board, threat)| {
+                    let child_board = child_board_cache.get_or_insert_with(|| position.played(mv));
+                    defends_against_threat(null_board, *threat, child_board)
+                });
             let quiet_history = if quiet {
                 self.quiet_history_score(board, mv, prev_move, ply)
             } else {
@@ -1005,7 +1069,7 @@ impl SearchCore {
                 && !in_check
                 && excluded_move.is_none()
                 && move_index > 0
-                && !gives_check
+                && !move_gives_check
                 && !defends_threat
             {
                 if capture
@@ -1038,6 +1102,7 @@ impl SearchCore {
                     continue;
                 }
             }
+            let child_board = child_board_cache.unwrap_or_else(|| position.played(mv));
             let child = position.child_with_board(mv, child_board);
             if quiet {
                 searched_quiets.push(mv);
@@ -1050,8 +1115,16 @@ impl SearchCore {
                 // 2-ply-back continuation context (see `continuation2_index`).
                 self.conthist_stack[ply] = move_base_index(board, mv);
             }
-            let singular_extension =
-                i16::from(Some(mv) == singular_move && next_extensions < MAX_CHECK_EXTENSIONS);
+            // Bounded by the remaining extension budget: `singular_move` is
+            // only set when `next_extensions < MAX_CHECK_EXTENSIONS` (so at
+            // least 1 ply remains), but a double extension additionally
+            // needs a second ply free.
+            let singular_extension = if Some(mv) == singular_move {
+                let remaining_budget = MAX_CHECK_EXTENSIONS.saturating_sub(next_extensions);
+                singular_extend_amount.min(i16::from(remaining_budget))
+            } else {
+                0
+            };
             let negative_extension = i16::from(Some(mv) == negative_extension_move);
             let full_depth = depth - 1 + singular_extension - negative_extension;
             let child_extensions = next_extensions + singular_extension as u8;
@@ -1077,7 +1150,7 @@ impl SearchCore {
                     LmrContext {
                         capture,
                         in_check,
-                        gives_check,
+                        gives_check: move_gives_check,
                         history_score: quiet_history,
                         pv_node,
                         cut_node,
@@ -1231,8 +1304,9 @@ impl SearchCore {
         }
 
         let in_check = !board.checkers().is_empty();
+        let tt_best = entry.and_then(|value| self.valid_tt_move(board, value));
         let mut picker = if in_check {
-            QuiescencePicker::new(board, true, self, ply)
+            QuiescencePicker::new(board, true, self, ply, tt_best)
         } else {
             QuiescencePicker::empty()
         };
@@ -1262,26 +1336,32 @@ impl SearchCore {
         }
 
         if !in_check {
-            picker = QuiescencePicker::new(board, false, self, ply);
+            picker = QuiescencePicker::new(board, false, self, ply, tt_best);
         }
         let mut best_move = None;
-        while let Some(picked) = picker.next() {
+        // Precomputed once per node, like `negamax`'s `check_context`.
+        let check_context = CheckContext::new(board);
+        while let Some(picked) = picker.next(board) {
             let mv = picked.mv;
             let capture = picked.capture;
-            let child_board = position.played(mv);
-            let gives_check = !child_board.checkers().is_empty();
-            if !in_check && capture && mv.promotion.is_none() && !gives_check && !picked.see_good {
-                continue;
-            }
-            if !in_check
-                && capture
-                && mv.promotion.is_none()
-                && !gives_check
-                && stand_pat + captured_value_for_capture(board, mv) + self.delta_pruning_margin()
+            // The pruning below is itself gated on `!in_check`, so skip the
+            // (otherwise cheap) check computation entirely while in check.
+            let move_gives_check = !in_check && gives_check(&check_context, board, mv);
+            debug_assert!(
+                in_check || move_gives_check != position.played(mv).checkers().is_empty(),
+                "gives_check fast path diverged for {mv} at {board}",
+            );
+            if !in_check && capture && mv.promotion.is_none() && !move_gives_check {
+                if !picked.see_good {
+                    continue;
+                }
+                if stand_pat + captured_value_for_capture(board, mv) + self.delta_pruning_margin()
                     < alpha
-            {
-                continue;
+                {
+                    continue;
+                }
             }
+            let child_board = position.played(mv);
             let child = position.child_with_board(mv, child_board);
             self.path.push(child.repetition_key());
             let score = -self.quiescence(&child, -beta, -alpha, ply + 1);
@@ -1394,6 +1474,7 @@ impl SearchCore {
                     .is_ok_and(|cancelled| cancelled >= self.stop_request_id)
             }) {
                 self.timed_out = true;
+                self.cancelled = true;
             }
             if crate::now_ms() >= self.deadline_ms {
                 self.timed_out = true;
@@ -1488,9 +1569,9 @@ impl SearchCore {
             .previous_iteration_score
             .is_some_and(|previous| line.score < previous - 50);
 
-        let mut fraction = 0.5_f64;
+        let mut fraction = 0.85_f64;
         if self.stable_best_iterations >= 2 {
-            fraction *= 0.8_f64.powi(i32::from(self.stable_best_iterations - 1));
+            fraction *= 0.9_f64.powi(i32::from(self.stable_best_iterations - 1));
         }
         if root_node_fraction >= 0.75 {
             fraction *= 0.8;
@@ -1506,7 +1587,7 @@ impl SearchCore {
 
         self.previous_best_move = Some(best_move);
         self.previous_iteration_score = Some(line.score);
-        fraction.clamp(0.25, 0.9)
+        fraction.clamp(0.6, 0.95)
     }
 
     fn predict_next_iteration(&mut self, elapsed_ms: f64) -> f64 {
@@ -1559,6 +1640,22 @@ impl SearchCore {
         if let Some(index) = matching
             && depth < i16::from(bucket[index].depth)
         {
+            // The existing entry is deeper and its search data stays more
+            // valuable than this shallower rewrite, but still refresh its
+            // generation. Otherwise the ageing eviction policy in the
+            // fallback branch below would see a stale generation and evict
+            // this genuinely useful cross-move entry as if it were garbage
+            // from a much older search.
+            let existing = bucket[index];
+            bucket[index] = TTEntry::new(
+                existing.key,
+                existing.best,
+                existing.score,
+                existing.static_eval(),
+                existing.depth,
+                existing.bound(),
+                self.generation,
+            );
             return;
         }
         let index = matching
@@ -1728,9 +1825,16 @@ fn singular_outcome(
     singular_beta: i32,
     tt_score: i32,
     beta: i32,
+    depth: i16,
 ) -> SingularOutcome {
-    if exclusion_score < singular_beta {
-        SingularOutcome::Extend
+    // A double margin below `singular_beta` means every alternative to the
+    // TT move fell short by roughly twice what "merely singular" requires —
+    // strong enough evidence to extend an extra ply.
+    let double_singular_beta = singular_beta - 2 * SINGULAR_MARGIN_PER_PLY * i32::from(depth);
+    if exclusion_score < double_singular_beta {
+        SingularOutcome::Extend(2)
+    } else if exclusion_score < singular_beta {
+        SingularOutcome::Extend(1)
     } else if singular_beta >= beta {
         SingularOutcome::MultiCut
     } else if tt_score >= beta {
@@ -1755,17 +1859,16 @@ fn requires_null_verification(depth: i16) -> bool {
     depth >= NULL_VERIFICATION_MIN_DEPTH
 }
 
-fn defends_against_threat(board: &Board, child: &Board, threat: Move) -> bool {
-    let Some(null_board) = board.null_move() else {
-        return false;
-    };
-    if !null_board.is_legal(threat) {
-        return false;
-    }
+/// Whether playing into `child` neutralizes `threat` as the opponent could
+/// have played it from `null_board` (the position with `threat`'s side to
+/// move, one ply after the node whose null-move search identified it).
+/// Callers precompute `null_board` and its legality for `threat` once per
+/// node; see the `threat_context` prelude in `negamax`.
+fn defends_against_threat(null_board: &Board, threat: Move, child: &Board) -> bool {
     if !child.is_legal(threat) {
         return true;
     }
-    is_capture(&null_board, threat)
+    is_capture(null_board, threat)
         && (!is_capture(child, threat) || !static_exchange_ge_capture(child, threat, 0))
 }
 
@@ -1798,6 +1901,37 @@ mod tests {
     use cozy_chess::Board;
 
     use super::*;
+
+    #[test]
+    fn timed_out_iteration_reports_a_sound_partial_line_only_for_single_pv() {
+        let board = Board::default();
+
+        // Multi-PV: a partial primary line is never surfaced, since a
+        // truncated line count would make the analysis panel flicker.
+        let mut multi_pv_search = SearchCore::new();
+        multi_pv_search.set_position(&board, &[]);
+        multi_pv_search.set_node_limit(Some(6_000));
+        let multi_pv_result = multi_pv_search.analyze_depth(&board, 8, 3, 10_000.0);
+        assert!(multi_pv_result.timed_out);
+        assert!(!multi_pv_result.partial);
+        assert!(multi_pv_result.lines.is_empty());
+
+        // Single-PV: enough root moves finish at this depth before the node
+        // limit trips that a sound (non-fail-low) partial line is available.
+        let mut search = SearchCore::new();
+        search.set_position(&board, &[]);
+        search.set_node_limit(Some(6_000));
+        let result = search.analyze_depth(&board, 8, 1, 10_000.0);
+        assert!(result.timed_out);
+        assert!(result.partial);
+        assert_eq!(result.lines.len(), 1);
+        assert!(board.is_legal(result.lines[0].moves[0]));
+    }
+
+    // The `cancelled` guard (a partial must never surface after a real
+    // cancellation, as opposed to a deadline) is only reachable through the
+    // wasm32 stop-flag mechanism; `engine/validate-cancellation.mjs` covers
+    // it end-to-end against the built Wasm.
 
     #[test]
     fn root_table_entry_tracks_the_primary_multipv_line() {
@@ -1982,10 +2116,25 @@ mod tests {
         assert!(!singular_candidate(8, 8, Bound::Upper, 100));
         assert!(!singular_candidate(8, 8, Bound::Lower, 30_000));
 
-        assert_eq!(singular_outcome(79, 80, 100, 90), SingularOutcome::Extend);
-        assert_eq!(singular_outcome(90, 90, 100, 90), SingularOutcome::MultiCut);
-        assert_eq!(singular_outcome(85, 85, 100, 90), SingularOutcome::Reduce);
-        assert_eq!(singular_outcome(85, 85, 89, 90), SingularOutcome::None);
+        assert_eq!(
+            singular_outcome(79, 80, 100, 90, 8),
+            SingularOutcome::Extend(1)
+        );
+        assert_eq!(
+            singular_outcome(90, 90, 100, 90, 8),
+            SingularOutcome::MultiCut
+        );
+        assert_eq!(
+            singular_outcome(85, 85, 100, 90, 8),
+            SingularOutcome::Reduce
+        );
+        assert_eq!(singular_outcome(85, 85, 89, 90, 8), SingularOutcome::None);
+        // Falling short of `singular_beta` by a full second margin (here
+        // 80 - 2*2*8 = 48) extends by two plies instead of one.
+        assert_eq!(
+            singular_outcome(40, 80, 100, 90, 8),
+            SingularOutcome::Extend(2)
+        );
     }
 
     #[test]
@@ -2004,11 +2153,12 @@ mod tests {
         assert!(requires_null_verification(10));
 
         let board = "r3k3/8/8/8/8/8/8/R3K3 w - - 0 1".parse::<Board>().unwrap();
+        let null_board = board.null_move().unwrap();
         let threat = "a8a1".parse().unwrap();
         let defense = played(&board, "a1b1".parse().unwrap());
         let irrelevant = played(&board, "e1f1".parse().unwrap());
-        assert!(defends_against_threat(&board, &defense, threat));
-        assert!(!defends_against_threat(&board, &irrelevant, threat));
+        assert!(defends_against_threat(&null_board, threat, &defense));
+        assert!(!defends_against_threat(&null_board, threat, &irrelevant));
     }
 
     #[test]
@@ -2141,13 +2291,27 @@ mod tests {
             moves: changed.moves.clone(),
         };
         let mut search = SearchCore::new();
-        assert_eq!(search.update_time_management(Some(&first), 0.5), 0.5);
-        assert_eq!(search.update_time_management(Some(&first), 0.8), 0.4);
-        assert!((search.update_time_management(Some(&first), 0.8) - 0.32).abs() < f64::EPSILON);
-        assert_eq!(search.update_time_management(Some(&changed), 0.5), 0.8);
+        // No history yet: the fraction is just the 0.85 base.
+        assert_eq!(search.update_time_management(Some(&first), 0.5), 0.85);
+        // A dominant root move (>=75% node share) trims the base.
+        assert!((search.update_time_management(Some(&first), 0.8) - 0.68).abs() < 1.0e-9);
+        // A second consecutive stable iteration compounds the stability
+        // discount on top of the root-share trim.
+        assert!((search.update_time_management(Some(&first), 0.8) - 0.612).abs() < 1.0e-9);
+        // Changing the best move resets stability and floors the fraction at
+        // 0.8, lifting it back up over the root-share trim that would
+        // otherwise apply.
+        assert_eq!(search.update_time_management(Some(&changed), 0.8), 0.8);
+        // A score collapse floors the fraction at 0.9 regardless of stability.
         assert_eq!(search.update_time_management(Some(&dropped), 0.5), 0.9);
 
+        // A thin root-move node share (<35%) floors the fraction at 0.7; with
+        // the higher base this only becomes visible once enough stable
+        // iterations have discounted the fraction below that floor.
         let mut scattered = SearchCore::new();
+        scattered.update_time_management(Some(&first), 0.2);
+        scattered.update_time_management(Some(&first), 0.2);
+        scattered.update_time_management(Some(&first), 0.2);
         assert_eq!(scattered.update_time_management(Some(&first), 0.2), 0.7);
     }
 

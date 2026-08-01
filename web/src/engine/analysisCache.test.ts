@@ -16,6 +16,7 @@ function makeAnalysis(overrides: Partial<Analysis> = {}): Analysis {
     clock_check_interval: 256,
     elapsed_ms: 10,
     timed_out: false,
+    partial: false,
     lines: [{ score_cp: 20, moves: ["e2e4"] }],
     ...overrides,
   };
