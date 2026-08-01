@@ -39,6 +39,7 @@ struct AnalysisResult {
     clock_check_interval: u32,
     elapsed_ms: f64,
     timed_out: bool,
+    partial: bool,
     lines: Vec<PrincipalVariation>,
 }
 
@@ -186,6 +187,7 @@ fn run_analysis(
         clock_check_interval: result.clock_check_interval,
         elapsed_ms: now_ms() - start,
         timed_out: result.timed_out,
+        partial: result.partial,
         lines: result
             .lines
             .into_iter()

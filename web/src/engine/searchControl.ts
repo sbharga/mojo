@@ -5,7 +5,6 @@
  */
 export const MAX_SEARCH_DEPTH = 32;
 const MIN_ITERATION_BUDGET_MS = 8;
-const MOVE_PREDICTION_SAFETY = 1.25;
 const ANALYSIS_PREDICTION_SAFETY = 1.5;
 
 /** Gives Rust a small positive budget so it can return a legal fallback. */
@@ -23,9 +22,17 @@ interface NextIterationInput {
 }
 
 /**
- * Stops at the soft deadline, or before an estimated next iteration would
- * overrun the hard deadline. Multi-PV work receives extra prediction slack:
- * its next-depth cost is noisier because each root line is searched.
+ * Stops at the soft deadline, or — for multi-PV analysis only — before an
+ * estimated next iteration would overrun the hard deadline.
+ *
+ * A move search (`multiPv === 1`) never applies the prediction gate: if a
+ * deeper iteration times out mid-search, `SearchCore::analyze_depth` still
+ * returns a sound partial line for every root move that finished (see its
+ * `partial` field), so there is nothing lost by starting an iteration that
+ * cannot complete — only the soft deadline above needs to hold. Multi-PV
+ * analysis has no such partial fallback (a truncated line count would make
+ * the analysis panel flicker), so it keeps predicting ahead to avoid
+ * starting work it cannot finish.
  */
 export function shouldStopBeforeNextIteration({
   elapsedMs,
@@ -36,9 +43,7 @@ export function shouldStopBeforeNextIteration({
   multiPv,
 }: NextIterationInput) {
   if (elapsedMs >= thinkTimeMs * softTimeFraction) return true;
+  if (multiPv === 1) return false;
   if (ebfGateOverride) return false;
-  const safety = multiPv > 1
-    ? ANALYSIS_PREDICTION_SAFETY
-    : MOVE_PREDICTION_SAFETY;
-  return predictedNextMs > (thinkTimeMs - elapsedMs) * safety;
+  return predictedNextMs > (thinkTimeMs - elapsedMs) * ANALYSIS_PREDICTION_SAFETY;
 }

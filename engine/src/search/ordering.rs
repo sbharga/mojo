@@ -37,7 +37,8 @@ struct ScoredMove {
 #[derive(Clone, Copy, Debug)]
 struct ScoredTacticalMove {
     score: i32,
-    picked: PickedTactical,
+    mv: Move,
+    capture: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -185,45 +186,44 @@ impl<'a> MovePicker<'a> {
                     }
                 }
                 Stage::Tactical => {
+                    // SEE is deferred to `Stage::GoodTactical` below instead
+                    // of run for every capture here: MVV + capture history
+                    // already orders captures reasonably, and a beta cutoff
+                    // or shallow move budget often means most of them are
+                    // never selected.
                     for mv in tactical_moves(self.board)
                         .into_iter()
                         .filter(|mv| Some(*mv) != self.tt_move)
                         .filter(|mv| !self.excluded.contains(mv))
                     {
                         let capture = is_capture(self.board, mv);
-                        let see = if capture {
-                            see_class(self.board, mv)
-                        } else {
-                            SeeClass::Equal
-                        };
                         let capture_history = if capture {
                             search.capture_history_score(self.board, mv)
                         } else {
                             0
                         };
-                        if capture && see == SeeClass::Losing {
-                            self.bad_tacticals.push(mv);
-                        } else {
-                            let score = tactical_score_with_see(
-                                self.board,
-                                mv,
-                                capture,
-                                see,
-                                capture_history,
-                            );
-                            self.scored.push(ScoredMove { score, mv });
-                        }
+                        let score =
+                            tactical_score_pending_see(self.board, mv, capture, capture_history);
+                        self.scored.push(ScoredMove { score, mv });
                     }
                     self.stage = Stage::GoodTactical;
                 }
                 Stage::GoodTactical => {
-                    if let Some(picked) = select_best(&mut self.scored) {
-                        if self.scored.is_empty() {
-                            self.stage = Stage::Special;
-                        }
-                        return Some(picked);
+                    let Some(mv) = select_best(&mut self.scored) else {
+                        self.stage = Stage::Special;
+                        continue;
+                    };
+                    // Now that this specific move was actually selected, pay
+                    // for its SEE: a losing capture is relegated to
+                    // `Stage::BadTactical` instead of returned here.
+                    if is_capture(self.board, mv) && see_class(self.board, mv) == SeeClass::Losing {
+                        self.bad_tacticals.push(mv);
+                        continue;
                     }
-                    self.stage = Stage::Special;
+                    if self.scored.is_empty() {
+                        self.stage = Stage::Special;
+                    }
+                    return Some(mv);
                 }
                 Stage::Special => {
                     while let Some(candidate) = self.special.get(self.special_index).copied() {
@@ -303,7 +303,13 @@ pub(crate) struct QuiescencePicker {
 }
 
 impl QuiescencePicker {
-    pub(crate) fn new(board: &Board, in_check: bool, search: &SearchCore, ply: usize) -> Self {
+    pub(crate) fn new(
+        board: &Board,
+        in_check: bool,
+        search: &SearchCore,
+        ply: usize,
+        tt_move: Option<Move>,
+    ) -> Self {
         let moves = if in_check {
             legal_moves(board)
         } else {
@@ -313,12 +319,12 @@ impl QuiescencePicker {
             .into_iter()
             .map(|mv| {
                 let capture = is_capture(board, mv);
-                let see = if capture {
-                    see_class(board, mv)
-                } else {
-                    SeeClass::Equal
-                };
-                let score = if in_check && !capture && mv.promotion.is_none() {
+                let score = if Some(mv) == tt_move {
+                    // Beats every tactical/killer/history score below: a TT
+                    // hit from a possibly deeper prior search is the
+                    // strongest ordering signal quiescence has.
+                    i32::MAX
+                } else if in_check && !capture && mv.promotion.is_none() {
                     if ply < MAX_PLY && search.killers[ply].contains(&Some(mv)) {
                         900_000
                     } else {
@@ -326,22 +332,16 @@ impl QuiescencePicker {
                             [mv.to as usize]
                     }
                 } else {
-                    tactical_score_with_see(
+                    // SEE is deferred to `next()`, at selection time — see
+                    // `tactical_score_pending_see`.
+                    tactical_score_pending_see(
                         board,
                         mv,
                         capture,
-                        see,
                         search.capture_history_score(board, mv),
                     )
                 };
-                ScoredTacticalMove {
-                    score,
-                    picked: PickedTactical {
-                        mv,
-                        capture,
-                        see_good: see != SeeClass::Losing,
-                    },
-                }
+                ScoredTacticalMove { score, mv, capture }
             })
             .collect();
         Self { scored }
@@ -357,9 +357,18 @@ impl QuiescencePicker {
         self.scored.is_empty()
     }
 
-    pub(crate) fn next(&mut self) -> Option<PickedTactical> {
+    pub(crate) fn next(&mut self, board: &Board) -> Option<PickedTactical> {
         let index = best_index(&self.scored, |item| item.score)?;
-        Some(self.scored.swap_remove(index).picked)
+        let picked = self.scored.swap_remove(index);
+        // Now that this specific move was actually selected, pay for its
+        // SEE instead of having paid for it (and every other candidate's)
+        // up front in `new`.
+        let see_good = !picked.capture || see_class(board, picked.mv) != SeeClass::Losing;
+        Some(PickedTactical {
+            mv: picked.mv,
+            capture: picked.capture,
+            see_good,
+        })
     }
 }
 
@@ -413,6 +422,25 @@ fn tactical_score_with_see(
         };
         1_000_000
             + see_class
+            + capture_history
+            + captured_value_for_capture(board, mv)
+            + mv.promotion.map_or(0, piece_value)
+    } else {
+        950_000 + mv.promotion.map_or(0, piece_value)
+    }
+}
+
+/// Same ordering formula as [`tactical_score_with_see`] but without the SEE
+/// class term, for callers that defer the (comparatively expensive) static
+/// exchange evaluation from scan time to selection time — see
+/// `MovePicker::Stage::Tactical`/`Stage::GoodTactical` and
+/// `QuiescencePicker`. MVV, capture history, and promotion value alone are
+/// enough to roughly order captures; a beta cutoff or a shallow move budget
+/// often means most of them are never selected, so this can skip the
+/// swap-off entirely for the ones the search never visits.
+fn tactical_score_pending_see(board: &Board, mv: Move, capture: bool, capture_history: i32) -> i32 {
+    if capture {
+        1_000_000
             + capture_history
             + captured_value_for_capture(board, mv)
             + mv.promotion.map_or(0, piece_value)
@@ -578,8 +606,8 @@ mod tests {
 
     use super::{
         CAPTURE_HISTORY_ENTRIES, CONTINUATION_HISTORY_ENTRIES, MovePicker, PIECE_TO_SQUARE,
-        RootMovePicker, RootMoveStat, SearchCore, capture_history_index, continuation_index,
-        move_base_index,
+        QuiescencePicker, RootMovePicker, RootMoveStat, SearchCore, capture_history_index,
+        continuation_index, move_base_index,
     };
     use crate::search::moves::{encode_move, legal_moves, played};
 
@@ -672,6 +700,25 @@ mod tests {
             &[],
         );
         assert_eq!(tt_picker.next(&search), Some(bad_capture));
+    }
+
+    #[test]
+    fn tt_move_is_ordered_first_in_quiescence() {
+        let board = "4k3/8/8/3p4/3Q3r/8/8/4K3 w - - 0 1"
+            .parse::<Board>()
+            .unwrap();
+        let rook_capture = "d4h4".parse().unwrap();
+        let pawn_capture = "d4d5".parse().unwrap();
+        let search = SearchCore::new();
+
+        // Without a TT move, MVV alone ranks the rook capture first.
+        let mut without_tt = QuiescencePicker::new(&board, false, &search, 0, None);
+        assert_eq!(without_tt.next(&board).unwrap().mv, rook_capture);
+
+        // With the lower-MVV pawn capture as the TT move, it's returned
+        // first anyway.
+        let mut with_tt = QuiescencePicker::new(&board, false, &search, 0, Some(pawn_capture));
+        assert_eq!(with_tt.next(&board).unwrap().mv, pawn_capture);
     }
 
     #[test]

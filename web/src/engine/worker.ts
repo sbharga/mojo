@@ -70,6 +70,7 @@ async function analyze(request: AnalyzeRequest) {
           clock_check_interval: 0,
           elapsed_ms: performance.now() - started,
           timed_out: false,
+          partial: false,
           lines: [{ score_cp: 0, moves: [move] }],
         };
         postMessage({
@@ -118,9 +119,14 @@ async function analyze(request: AnalyzeRequest) {
         request.requestId <= cancelledBefore
         || isCancelled(stopFlag, request.requestId)
       ) return;
-      // A partial deeper iteration is useful search work, but it must never
-      // replace the last fully completed and internally consistent result.
-      if (!result.timed_out && result.lines.length > 0) {
+      // A timed-out iteration is only usable when the engine itself marked it
+      // `partial`: every root move that contributed to its line finished a
+      // full search, it's just that a later root move (or a deeper depth)
+      // never got the chance to run. It must never replace a result from an
+      // equal or greater depth (the loop's `depth` only increases, but this
+      // guards the invariant explicitly rather than relying on that shape).
+      const usable = result.lines.length > 0 && (!result.timed_out || result.partial);
+      if (usable && (!latest || result.depth > latest.depth)) {
         latest = rootedResult;
         postMessage({
           type: "analysis",
@@ -163,6 +169,7 @@ async function analyze(request: AnalyzeRequest) {
           clock_check_interval: 256,
           elapsed_ms: performance.now() - started,
           timed_out: true,
+          partial: false,
           lines: [{ score_cp: 0, moves: [move] }],
         };
       }

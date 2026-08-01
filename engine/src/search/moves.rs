@@ -19,11 +19,21 @@ pub(crate) fn legal_moves(board: &Board) -> MoveList {
 }
 
 pub(crate) fn tactical_moves(board: &Board) -> MoveList {
-    let mut moves = moves_to_targets(board, capture_targets(board));
+    // A capturing move and a non-capturing promotion are both "tactical", so
+    // a pawn's targets are the union of the two; every other piece only has
+    // captures. One `generate_moves` pass over the union covers both, since
+    // `PieceMoves` carries its own `piece` and captures on the promotion
+    // rank are already included in `capture_targets`.
+    let captures = capture_targets(board);
     let promotion_rank = Rank::Eighth.relative_to(board.side_to_move()).bitboard();
-    let pawns = board.colored_pieces(board.side_to_move(), Piece::Pawn);
-    board.generate_moves_for(pawns, |mut piece_moves| {
-        piece_moves.to &= promotion_rank & !board.colors(!board.side_to_move());
+    let quiet_promotions = promotion_rank & !board.colors(!board.side_to_move());
+    let mut moves = MoveList::new();
+    board.generate_moves(|mut piece_moves| {
+        piece_moves.to &= if piece_moves.piece == Piece::Pawn {
+            captures | quiet_promotions
+        } else {
+            captures
+        };
         moves.extend(piece_moves);
         false
     });
@@ -36,16 +46,6 @@ pub(crate) fn quiet_moves(board: &Board) -> MoveList {
     board.generate_moves(|mut piece_moves| {
         piece_moves.to &= targets;
         moves.extend(piece_moves.into_iter().filter(|mv| mv.promotion.is_none()));
-        false
-    });
-    moves
-}
-
-fn moves_to_targets(board: &Board, targets: BitBoard) -> MoveList {
-    let mut moves = MoveList::new();
-    board.generate_moves(|mut piece_moves| {
-        piece_moves.to &= targets;
-        moves.extend(piece_moves);
         false
     });
     moves
@@ -203,6 +203,33 @@ mod tests {
             all.sort_unstable();
             staged.sort_unstable();
             assert_eq!(staged, all, "{fen}");
+        }
+    }
+
+    #[test]
+    fn tactical_moves_are_exactly_captures_and_promotions() {
+        for fen in [
+            Board::default().to_string(),
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1".to_owned(),
+            // A quiet promotion (g7g8) and a capturing promotion (g7h8) both
+            // available in the same position.
+            "4k2r/6P1/8/8/8/8/8/4K3 w - - 0 1".to_owned(),
+            // En passant only.
+            "4k3/6P1/8/3pP3/8/8/8/4K3 w - d6 0 1".to_owned(),
+        ] {
+            let board = fen.parse::<Board>().unwrap();
+            let mut expected: Vec<_> = legal_moves(&board)
+                .into_iter()
+                .filter(|&mv| is_capture(&board, mv) || mv.promotion.is_some())
+                .map(encode_move)
+                .collect();
+            let mut actual: Vec<_> = tactical_moves(&board)
+                .into_iter()
+                .map(encode_move)
+                .collect();
+            expected.sort_unstable();
+            actual.sort_unstable();
+            assert_eq!(actual, expected, "{fen}");
         }
     }
 

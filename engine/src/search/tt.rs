@@ -3,7 +3,7 @@
 use super::{MATE_SCORE, MAX_PLY};
 
 pub(crate) const TT_BUCKET_SIZE: usize = 4;
-pub(crate) const TT_BUCKETS: usize = 1 << 15;
+pub(crate) const TT_BUCKETS: usize = 1 << 18;
 pub(crate) const TT_ENTRIES: usize = TT_BUCKETS * TT_BUCKET_SIZE;
 
 const BOUND_MASK: u8 = 0b11;

@@ -24,6 +24,9 @@ export interface Analysis {
   clock_check_interval: number;
   elapsed_ms: number;
   timed_out: boolean;
+  /** A timed-out result whose line still reflects a fully searched (not
+   * merely aborted mid-move) iteration; sound to play, but see `timed_out`. */
+  partial: boolean;
   lines: AnalysisLine[];
 }
 
