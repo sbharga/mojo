@@ -53,7 +53,7 @@ self.onmessage = (event: MessageEvent<ComparisonWorkerRequest>) => {
         opening: request.opening,
         pairIndex: request.pairIndex,
         gameIndex: request.pairIndex * 2 + offset,
-        rules: { depth: configuration!.depth, maxPlies: configuration!.maxPlies },
+        rules: { moveTimeMs: configuration!.moveTimeMs, maxPlies: configuration!.maxPlies },
       })
       send({ type: 'game', runId: request.runId, game })
     })

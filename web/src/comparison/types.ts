@@ -33,6 +33,10 @@ export interface GameResult {
   reason: TerminationReason
   plies: number
   pgn: string
+  baselineDepth: number
+  candidateDepth: number
+  baselineMs: number
+  candidateMs: number
 }
 
 export interface MatchSummary {
@@ -51,8 +55,13 @@ export interface MatchConfiguration {
   baseline: EngineVersion
   candidate: EngineVersion
   games: number
-  depth: number
+  moveTimeMs: number
   maxPlies: number
+}
+
+export interface MatchConcurrency {
+  workers: number
+  hardwareConcurrency: number
 }
 
 export interface MatchExport {
@@ -62,6 +71,7 @@ export interface MatchExport {
   configuration: MatchConfiguration
   summary: MatchSummary
   games: GameResult[]
+  concurrency: MatchConcurrency
   error?: string
 }
 
@@ -72,7 +82,7 @@ export interface WorkerInitializeRequest {
   candidateModuleUrl: string
   baselineLabel: string
   candidateLabel: string
-  depth: number
+  moveTimeMs: number
   maxPlies: number
 }
 
