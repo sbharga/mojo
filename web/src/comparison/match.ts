@@ -1,5 +1,10 @@
-import { Chess, type Square } from 'chess.js'
-import { MAX_SEARCH_DEPTH, iterationBudget, shouldStopBeforeNextIteration } from '../engine/searchControl'
+import { Chess } from 'chess.js'
+import {
+  MAX_SEARCH_DEPTH,
+  iterationBudget,
+  shouldStopBeforeNextIteration,
+} from '../engine/searchControl'
+import { parseUci } from '../engine/uci'
 import type { Color, GameResult, MatchSummary, Opening, Winner } from './types'
 
 export interface AnalysisLineLike {
@@ -48,11 +53,7 @@ const DEFAULT_RULES = {
 }
 
 function playUci(game: Chess, uci: string) {
-  game.move({
-    from: uci.slice(0, 2) as Square,
-    to: uci.slice(2, 4) as Square,
-    promotion: uci[4] as 'q' | 'r' | 'b' | 'n' | undefined,
-  })
+  game.move(parseUci(uci))
 }
 
 function gamePly(game: Chess) {
@@ -70,20 +71,24 @@ function search(engine: HistoricalEngine, fen: string, priorFens: string[], move
     if (remaining <= 0 && completed) break
     const result = engine.analyze_depth(depth, 1, iterationBudget(remaining))
     const reachedDepth = result.depth ?? depth
-    const usable = (result.lines?.length ?? 0) > 0 && (!result.timed_out || (result.partial ?? false))
+    const usable =
+      (result.lines?.length ?? 0) > 0 && (!result.timed_out || (result.partial ?? false))
     if (usable && reachedDepth >= completedDepth) {
       completed = result
       completedDepth = reachedDepth
     }
     if (result.timed_out) break
-    if (shouldStopBeforeNextIteration({
-      elapsedMs: performance.now() - started,
-      thinkTimeMs: moveTimeMs,
-      softTimeFraction: result.soft_time_fraction ?? 0.5,
-      predictedNextMs: result.predicted_next_ms ?? 0,
-      ebfGateOverride: result.ebf_gate_override ?? false,
-      multiPv: 1,
-    })) break
+    if (
+      shouldStopBeforeNextIteration({
+        elapsedMs: performance.now() - started,
+        thinkTimeMs: moveTimeMs,
+        softTimeFraction: result.soft_time_fraction ?? 0.5,
+        predictedNextMs: result.predicted_next_ms ?? 0,
+        ebfGateOverride: result.ebf_gate_override ?? false,
+        multiPv: 1,
+      })
+    )
+      break
   }
   const line = completed?.lines?.[0]
   const move = line?.moves[0] ?? engine.fallback_move()
@@ -123,8 +128,9 @@ export function selectOpenings(openings: Opening[], pairCount: number) {
     throw new Error(`Opening pair count must be between 1 and ${unique.length}`)
   }
   if (pairCount === 1) return [unique[Math.floor(unique.length / 2)]]
-  return Array.from({ length: pairCount }, (_, index) =>
-    unique[Math.round((index * (unique.length - 1)) / (pairCount - 1))],
+  return Array.from(
+    { length: pairCount },
+    (_, index) => unique[Math.round((index * (unique.length - 1)) / (pairCount - 1))],
   )
 }
 
@@ -170,11 +176,16 @@ export function playGame(args: {
   let candidateMs = 0
 
   game.header(
-    'Event', 'Mojo commit comparison',
-    'White', candidateColor === 'white' ? candidateLabel : baselineLabel,
-    'Black', candidateColor === 'black' ? candidateLabel : baselineLabel,
-    'SetUp', '1',
-    'FEN', opening.fen,
+    'Event',
+    'Mojo commit comparison',
+    'White',
+    candidateColor === 'white' ? candidateLabel : baselineLabel,
+    'Black',
+    candidateColor === 'black' ? candidateLabel : baselineLabel,
+    'SetUp',
+    '1',
+    'FEN',
+    opening.fen,
   )
 
   try {
@@ -204,9 +215,8 @@ export function playGame(args: {
         whiteWinStreak = 0
         blackWinStreak = 0
       }
-      drawStreak = evaluation !== undefined && Math.abs(evaluation) <= rules.drawScoreCp
-        ? drawStreak + 1
-        : 0
+      drawStreak =
+        evaluation !== undefined && Math.abs(evaluation) <= rules.drawScoreCp ? drawStreak + 1 : 0
 
       priorFens.push(fen)
       playUci(game, move)
@@ -247,7 +257,9 @@ export function playGame(args: {
       plies: playedPlies,
       pgn: game.pgn({ maxWidth: 80, newline: '\n' }),
       baselineDepth: baselineMoves ? Math.round((baselineDepthSum / baselineMoves) * 10) / 10 : 0,
-      candidateDepth: candidateMoves ? Math.round((candidateDepthSum / candidateMoves) * 10) / 10 : 0,
+      candidateDepth: candidateMoves
+        ? Math.round((candidateDepthSum / candidateMoves) * 10) / 10
+        : 0,
       baselineMs: Math.round(baselineMs),
       candidateMs: Math.round(candidateMs),
     }
@@ -265,7 +277,13 @@ function pairedProbabilities(elo: number, drawRate: number) {
   const score = logisticScore(elo)
   const win = score - drawRate / 2
   const loss = 1 - score - drawRate / 2
-  return [loss * loss, 2 * loss * drawRate, drawRate * drawRate + 2 * loss * win, 2 * win * drawRate, win * win]
+  return [
+    loss * loss,
+    2 * loss * drawRate,
+    drawRate * drawRate + 2 * loss * win,
+    2 * win * drawRate,
+    win * win,
+  ]
 }
 
 export function summarizeGames(games: GameResult[]): MatchSummary {
@@ -278,15 +296,25 @@ export function summarizeGames(games: GameResult[]): MatchSummary {
     scores.push(game.candidateScore)
     pairs.set(game.pairIndex, scores)
   }
-  const pairScores = [...pairs.values()].filter((scores) => scores.length === 2).map((scores) => scores[0] + scores[1])
+  const pairScores = [...pairs.values()]
+    .filter((scores) => scores.length === 2)
+    .map((scores) => scores[0] + scores[1])
   const counts = [0, 0, 0, 0, 0]
   for (const score of pairScores) counts[Math.round(score * 2)] += 1
   const h0 = pairedProbabilities(0, 0.5)
   const h1 = pairedProbabilities(10, 0.5)
-  const llr = counts.reduce((total, count, index) => total + count * Math.log(h1[index] / h0[index]), 0)
+  const llr = counts.reduce(
+    (total, count, index) => total + count * Math.log(h1[index] / h0[index]),
+    0,
+  )
   const lower = Math.log(0.05 / 0.95)
   const upper = Math.log(0.95 / 0.05)
-  const decision = llr >= upper ? 'Candidate is at least +10 Elo' : llr <= lower ? 'Candidate improvement rejected' : 'More games needed'
+  const decision =
+    llr >= upper
+      ? 'Candidate is at least +10 Elo'
+      : llr <= lower
+        ? 'Candidate improvement rejected'
+        : 'More games needed'
   return {
     wins,
     draws,

@@ -3,22 +3,22 @@
  * pass. Keeping this independent of the Worker/Wasm boundary makes the time
  * budget contract explicit and straightforward to test.
  */
-export const MAX_SEARCH_DEPTH = 32;
-const MIN_ITERATION_BUDGET_MS = 8;
-const ANALYSIS_PREDICTION_SAFETY = 1.5;
+export const MAX_SEARCH_DEPTH = 32
+const MIN_ITERATION_BUDGET_MS = 8
+const ANALYSIS_PREDICTION_SAFETY = 1.5
 
 /** Gives Rust a small positive budget so it can return a legal fallback. */
 export function iterationBudget(remainingMs: number) {
-  return Math.max(MIN_ITERATION_BUDGET_MS, remainingMs);
+  return Math.max(MIN_ITERATION_BUDGET_MS, remainingMs)
 }
 
 interface NextIterationInput {
-  elapsedMs: number;
-  thinkTimeMs: number;
-  softTimeFraction: number;
-  predictedNextMs: number;
-  ebfGateOverride: boolean;
-  multiPv: number;
+  elapsedMs: number
+  thinkTimeMs: number
+  softTimeFraction: number
+  predictedNextMs: number
+  ebfGateOverride: boolean
+  multiPv: number
 }
 
 /**
@@ -42,8 +42,8 @@ export function shouldStopBeforeNextIteration({
   ebfGateOverride,
   multiPv,
 }: NextIterationInput) {
-  if (elapsedMs >= thinkTimeMs * softTimeFraction) return true;
-  if (multiPv === 1) return false;
-  if (ebfGateOverride) return false;
-  return predictedNextMs > (thinkTimeMs - elapsedMs) * ANALYSIS_PREDICTION_SAFETY;
+  if (elapsedMs >= thinkTimeMs * softTimeFraction) return true
+  if (multiPv === 1) return false
+  if (ebfGateOverride) return false
+  return predictedNextMs > (thinkTimeMs - elapsedMs) * ANALYSIS_PREDICTION_SAFETY
 }

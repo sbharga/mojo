@@ -19,7 +19,8 @@ export interface Opening {
 
 export type Color = 'white' | 'black'
 export type Winner = Color | null
-export type TerminationReason = 'checkmate' | 'rules draw' | 'score adjudication' | 'draw adjudication' | 'maximum plies'
+export type TerminationReason =
+  'checkmate' | 'rules draw' | 'score adjudication' | 'draw adjudication' | 'maximum plies'
 
 export interface GameResult {
   pairIndex: number

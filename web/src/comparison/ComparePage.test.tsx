@@ -9,7 +9,17 @@ import type { EngineVersionManifest } from './types'
 const matchMock = vi.hoisted(() => ({
   status: 'idle' as const,
   games: [],
-  summary: { wins: 0, draws: 0, losses: 0, score: 0, completedPairs: 0, llr: 0, lower: -2.944, upper: 2.944, decision: 'More games needed' },
+  summary: {
+    wins: 0,
+    draws: 0,
+    losses: 0,
+    score: 0,
+    completedPairs: 0,
+    llr: 0,
+    lower: -2.944,
+    upper: 2.944,
+    decision: 'More games needed',
+  },
   configuration: null,
   startedAt: null,
   finishedAt: null,
@@ -25,17 +35,38 @@ vi.mock('./useComparisonMatch', () => ({ useComparisonMatch: () => matchMock }))
 const manifest: EngineVersionManifest = {
   generatedAt: '2026-07-17T00:00:00Z',
   versions: [
-    { sha: 'candidate', shortSha: 'candida', committedAt: '2026-07-17T00:00:00Z', subject: 'Candidate', modulePath: 'candidate/mojo_engine.js', wasmPath: 'candidate/mojo_engine_bg.wasm' },
-    { sha: 'baseline', shortSha: 'baselin', committedAt: '2026-07-16T00:00:00Z', subject: 'Baseline', modulePath: 'baseline/mojo_engine.js', wasmPath: 'baseline/mojo_engine_bg.wasm' },
+    {
+      sha: 'candidate',
+      shortSha: 'candida',
+      committedAt: '2026-07-17T00:00:00Z',
+      subject: 'Candidate',
+      modulePath: 'candidate/mojo_engine.js',
+      wasmPath: 'candidate/mojo_engine_bg.wasm',
+    },
+    {
+      sha: 'baseline',
+      shortSha: 'baselin',
+      committedAt: '2026-07-16T00:00:00Z',
+      subject: 'Baseline',
+      modulePath: 'baseline/mojo_engine.js',
+      wasmPath: 'baseline/mojo_engine_bg.wasm',
+    },
   ],
 }
 
 beforeEach(() => {
   matchMock.start.mockClear()
   matchMock.cancel.mockClear()
-  vi.stubGlobal('fetch', vi.fn()
-    .mockResolvedValueOnce({ ok: true, json: async () => manifest })
-    .mockResolvedValueOnce({ ok: true, json: async () => ({ positions: [{ name: 'Opening', fen: 'fen' }] }) }))
+  vi.stubGlobal(
+    'fetch',
+    vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => manifest })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ positions: [{ name: 'Opening', fen: 'fen' }] }),
+      }),
+  )
 })
 
 afterEach(() => {
@@ -77,7 +108,9 @@ describe('ComparePage', () => {
     await user.selectOptions(screen.getByLabelText('Baseline commit'), 'baseline')
     await user.clear(screen.getByLabelText('Total games'))
     await user.type(screen.getByLabelText('Total games'), '3')
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Start match' })).toHaveProperty('disabled', true))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Start match' })).toHaveProperty('disabled', true),
+    )
   })
 
   it('requires a move time between 10 and 5000 ms', async () => {

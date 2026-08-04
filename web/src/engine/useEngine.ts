@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { AnalysisCache } from "./analysisCache";
-import type { Analysis, WorkerMessage } from "./types";
-import { cancelThrough, createStopSignal, type StopSignal } from "./stopSignal";
-import { ponderSeed } from "./pvSeed";
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { AnalysisCache } from './analysisCache'
+import type { Analysis, WorkerMessage } from './types'
+import { cancelThrough, createStopSignal, type StopSignal } from './stopSignal'
+import { ponderSeed } from './pvSeed'
 
 // The 'move' and 'analysis' purposes each get their own Worker (and Wasm
 // Engine instance) rather than sharing one. A single analyze_depth call is
@@ -14,142 +14,125 @@ import { ponderSeed } from "./pvSeed";
 // Separate Worker threads make that impossible: they run concurrently, so
 // starting a 'move' request is never delayed by whatever the analysis
 // worker happens to be doing.
-const PURPOSES = ["move", "analysis"] as const;
-type Purpose = (typeof PURPOSES)[number];
+const PURPOSES = ['move', 'analysis'] as const
+type Purpose = (typeof PURPOSES)[number]
 
 export function useEngine(onMove: (uci: string) => void) {
   const workers = useRef<Record<Purpose, Worker | null>>({
     move: null,
     analysis: null,
-  });
-  const request = useRef(0);
+  })
+  const request = useRef(0)
   const stopSignals = useRef<Record<Purpose, StopSignal | null>>({
     move: null,
     analysis: null,
-  });
-  const cache = useRef<AnalysisCache | null>(null);
-  if (cache.current === null) cache.current = new AnalysisCache();
-  const analysisCache = cache.current;
-  const [analysis, setAnalysis] = useState<Analysis | null>(null);
-  const [readyWorkers, setReadyWorkers] = useState<Set<Purpose>>(new Set());
-  const [error, setError] = useState<string | null>(null);
+  })
+  const cache = useRef<AnalysisCache | null>(null)
+  if (cache.current === null) cache.current = new AnalysisCache()
+  const analysisCache = cache.current
+  const [analysis, setAnalysis] = useState<Analysis | null>(null)
+  const [readyWorkers, setReadyWorkers] = useState<Set<Purpose>>(new Set())
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     const instances = PURPOSES.map((purpose) => {
-      const instance = new Worker(new URL("./worker.ts", import.meta.url), {
-        type: "module",
-      });
-      workers.current[purpose] = instance;
-      const stopSignal = createStopSignal();
-      stopSignals.current[purpose] = stopSignal;
+      const instance = new Worker(new URL('./worker.ts', import.meta.url), {
+        type: 'module',
+      })
+      workers.current[purpose] = instance
+      const stopSignal = createStopSignal()
+      stopSignals.current[purpose] = stopSignal
       instance.onmessage = (event: MessageEvent<WorkerMessage>) => {
-        const message = event.data;
-        if (message.type === "ready") {
-          setReadyWorkers((current) => new Set(current).add(purpose));
-          setError(null);
+        const message = event.data
+        if (message.type === 'ready') {
+          setReadyWorkers((current) => new Set(current).add(purpose))
+          setError(null)
         }
         // Request zero is initialization. Errors from superseded searches
         // must not replace the status of the current position.
         if (
-          message.type === "error" &&
+          message.type === 'error' &&
           (message.requestId === 0 || message.requestId === request.current)
         )
-          setError(message.message);
+          setError(message.message)
         // Cache every valid result we see, even from a superseded request —
         // it's still a correct, reusable result for its own (older) fen.
-        if (message.type === "analysis")
-          analysisCache.set(message.analysis);
-        if (message.type === "complete" && message.analysis)
-          analysisCache.set(message.analysis);
+        if (message.type === 'analysis') analysisCache.set(message.analysis)
+        if (message.type === 'complete' && message.analysis) analysisCache.set(message.analysis)
+        if (message.type === 'analysis' && message.requestId === request.current)
+          setAnalysis(message.analysis)
         if (
-          message.type === "analysis" &&
-          message.requestId === request.current
-        )
-          setAnalysis(message.analysis);
-        if (
-          message.type === "complete" &&
+          message.type === 'complete' &&
           message.requestId === request.current &&
           message.analysis
         ) {
-          setAnalysis(message.analysis);
-          if (message.purpose === "move" && message.analysis.lines[0]?.moves[0])
-            onMove(message.analysis.lines[0].moves[0]);
+          setAnalysis(message.analysis)
+          if (message.purpose === 'move' && message.analysis.lines[0]?.moves[0])
+            onMove(message.analysis.lines[0].moves[0])
         }
-      };
+      }
       instance.postMessage({
-        type: "initialize",
+        type: 'initialize',
         stopBuffer: stopSignal?.buffer,
-      });
-      return instance;
-    });
-    return () => instances.forEach((instance) => instance.terminate());
-  }, [analysisCache, onMove]);
+      })
+      return instance
+    })
+    return () => instances.forEach((instance) => instance.terminate())
+  }, [analysisCache, onMove])
 
   const start = useCallback(
-    (
-      fen: string,
-      historyFens: string[],
-      thinkTimeMs: number,
-      purpose: Purpose,
-    ) => {
-      request.current += 1;
-      setError(null);
-      const requestId = request.current;
+    (fen: string, historyFens: string[], thinkTimeMs: number, purpose: Purpose) => {
+      request.current += 1
+      setError(null)
+      const requestId = request.current
       // Cancel on both workers: the previous request may have used either
       // purpose, and either worker may still hold an older stale request.
       for (const p of PURPOSES) {
-        cancelThrough(stopSignals.current[p]?.view ?? null, requestId - 1);
+        cancelThrough(stopSignals.current[p]?.view ?? null, requestId - 1)
         workers.current[p]?.postMessage({
-          type: "cancel",
+          type: 'cancel',
           requestId: requestId - 1,
-        });
+        })
       }
       // A fen already fully analyzed (history navigation, or pause/resume
       // landing back on the same position) doesn't need to be re-searched
       // from depth 1 by the other worker.
-      const cached = analysisCache.get(
-        fen,
-        historyFens,
-        purpose === "move" ? 1 : 3,
-      );
+      const cached = analysisCache.get(fen, historyFens, purpose === 'move' ? 1 : 3)
       if (cached) {
-        setAnalysis(cached);
-        if (purpose === "move" && cached.lines[0]?.moves[0])
-          onMove(cached.lines[0].moves[0]);
-        return;
+        setAnalysis(cached)
+        if (purpose === 'move' && cached.lines[0]?.moves[0]) onMove(cached.lines[0].moves[0])
+        return
       }
-      const predecessorFen = historyFens.at(-1);
-      const seed = purpose === "move" && predecessorFen
-        ? ponderSeed(
-            fen,
-            analysisCache.peek(predecessorFen, historyFens.slice(0, -1), 1),
-          )
-        : null;
-      setAnalysis(null);
+      const predecessorFen = historyFens.at(-1)
+      const seed =
+        purpose === 'move' && predecessorFen
+          ? ponderSeed(fen, analysisCache.peek(predecessorFen, historyFens.slice(0, -1), 1))
+          : null
+      setAnalysis(null)
       workers.current[purpose]?.postMessage({
-        type: "analyze",
+        type: 'analyze',
         requestId,
         fen,
         historyFens,
         thinkTimeMs,
         purpose,
         seed: seed ?? undefined,
-      });
+      })
     },
     [analysisCache, onMove],
-  );
+  )
 
   const cancel = useCallback(() => {
-    request.current += 1;
-    setAnalysis(null);
+    request.current += 1
+    setAnalysis(null)
     for (const p of PURPOSES) {
-      cancelThrough(stopSignals.current[p]?.view ?? null, request.current);
+      cancelThrough(stopSignals.current[p]?.view ?? null, request.current)
       workers.current[p]?.postMessage({
-        type: "cancel",
+        type: 'cancel',
         requestId: request.current,
-      });
+      })
     }
-  }, []);
+  }, [])
 
   return {
     analysis,
@@ -157,5 +140,5 @@ export function useEngine(onMove: (uci: string) => void) {
     error,
     start,
     cancel,
-  };
+  }
 }

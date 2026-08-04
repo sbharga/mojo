@@ -173,6 +173,41 @@ enum AspirationFailure {
     High,
 }
 
+/// Outcome of a null-move pruning probe at the top of `negamax`.
+enum NullMoveOutcome {
+    /// The probe was skipped or found nothing useful.
+    None,
+    /// No cutoff, but the null-move search revealed a threat move to help
+    /// order/prune the sibling moves that follow.
+    Threat(Move),
+    /// `negamax` should return this score immediately.
+    Cutoff(i32),
+}
+
+/// Outcome of the static-eval-derived reverse-futility and razoring checks.
+enum EvalStageOutcome {
+    /// `negamax` should return this score immediately.
+    Cutoff(i32),
+    /// No cutoff; carries the eval state the move loop and TT store need.
+    Continue {
+        raw_static_eval: Option<i32>,
+        static_eval: Option<i32>,
+        improving: Option<bool>,
+    },
+}
+
+/// Outcome of the singular-extension probe.
+enum SingularStageOutcome {
+    /// `negamax` should return this score immediately (multi-cut, or timeout).
+    Cutoff(i32),
+    /// No cutoff; carries the extension/reduction to apply in the move loop.
+    Extension {
+        singular_move: Option<Move>,
+        singular_extend_amount: i16,
+        negative_extension_move: Option<Move>,
+    },
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct LmrContext {
     capture: bool,
@@ -787,214 +822,81 @@ impl SearchCore {
         }
 
         let mut threat_move = None;
-        if allow_null
-            && !pv_node
-            && !in_check
-            && depth >= NULL_MOVE_MIN_DEPTH
-            && beta.abs() < MATE_SCORE - MAX_PLY as i32
-            && board.halfmove_clock() < NULL_MOVE_HALFMOVE_LIMIT
-            && has_non_pawn_material(board, board.side_to_move())
-            && let Some(null_position) = position.null_child()
-        {
-            let reduction = NULL_MOVE_BASE_REDUCTION + depth / NULL_MOVE_DEPTH_DIVISOR;
-            let previous_null_boundary = self.null_boundary;
-            self.null_boundary = Some(self.path.len());
-            self.path.push(null_position.repetition_key());
-            let null_score = -self.negamax(
-                &null_position,
-                depth - 1 - reduction,
-                -beta,
-                -beta + 1,
-                ply + 1,
-                false,
-                false,
-                next_extensions,
-                None,
-                None,
-                None,
-            );
-            let null_threat = self.null_threat(null_position.board(), ply + 1);
-            self.path.pop();
-            self.null_boundary = previous_null_boundary;
-            if self.timed_out {
-                return 0;
-            }
-            if null_score >= beta {
-                if requires_null_verification(depth) {
-                    #[cfg(test)]
-                    {
-                        self.null_verifications += 1;
-                    }
-                    let verification_score = self.negamax(
-                        position,
-                        depth - reduction,
-                        beta - 1,
-                        beta,
-                        ply,
-                        true,
-                        false,
-                        next_extensions,
-                        prev_move,
-                        None,
-                        ordering_threat,
-                    );
-                    if self.timed_out {
-                        return 0;
-                    }
-                    if verification_score >= beta {
-                        return verification_score;
-                    }
-                } else {
-                    return if board.generate_moves(|_| true) {
-                        null_score
-                    } else {
-                        0
-                    };
-                }
-            } else {
-                threat_move = null_threat;
-            }
-        }
-
-        let raw_static_eval = if in_check {
-            None
-        } else {
-            Some(
-                entry
-                    .and_then(TTEntry::static_eval)
-                    .unwrap_or_else(|| self.raw_evaluate(position)),
-            )
-        };
-        let mut static_eval = raw_static_eval.map(|raw| self.corrected_static_eval(position, raw));
-        let improving = static_eval.and_then(|eval| self.record_static_eval(ply, eval));
-        if static_eval.is_none() {
-            self.static_evals[ply] = i16::MIN;
-        }
-        if !pv_node
-            && !in_check
-            && excluded_move.is_none()
-            && depth <= RFP_MAX_DEPTH
-            && beta.abs() < MATE_SCORE - MAX_PLY as i32
-        {
-            let eval = *static_eval.get_or_insert_with(|| self.raw_evaluate(position));
-            static_eval = Some(eval);
-            if eval - rfp_margin(depth, improving, self.rfp_margin_per_ply()) >= beta {
-                return if board.generate_moves(|_| true) {
-                    eval
-                } else {
-                    0
-                };
-            }
-        }
-
-        if !pv_node
-            && !in_check
-            && excluded_move.is_none()
-            && depth <= RAZOR_MAX_DEPTH
-            && beta.abs() < MATE_SCORE - MAX_PLY as i32
-        {
-            let eval = *static_eval.get_or_insert_with(|| self.raw_evaluate(position));
-            if eval + RAZOR_MARGIN_BASE + RAZOR_MARGIN_PER_PLY * i32::from(depth) <= alpha {
-                let score = self.quiescence(position, alpha, alpha + 1, ply);
-                if self.timed_out {
-                    return 0;
-                }
-                if score <= alpha {
-                    return score;
-                }
-            }
-        }
-
-        let probcut_margin = self.probcut_margin();
-        if should_probcut(
+        match self.try_null_move_pruning(
+            position,
             depth,
             beta,
+            ply,
             pv_node,
             in_check,
-            excluded_move.is_some(),
-            probcut_margin,
+            allow_null,
+            next_extensions,
+            prev_move,
+            ordering_threat,
         ) {
-            let probcut_beta = beta + probcut_margin;
-            let mut captures = QuiescencePicker::new(board, false, self, ply, None);
-            while let Some(picked) = captures.next(board) {
-                let mv = picked.mv;
-                if !picked.capture || !picked.see_good {
-                    continue;
-                }
-                let child = position.child(mv);
-                self.path.push(child.repetition_key());
-                let score = -self.negamax(
-                    &child,
-                    depth - PROBCUT_DEPTH_REDUCTION,
-                    -probcut_beta,
-                    -probcut_beta + 1,
-                    ply + 1,
-                    false,
-                    true,
-                    next_extensions,
-                    Some(mv),
-                    None,
-                    threat_move,
-                );
-                self.path.pop();
-                if self.timed_out {
-                    return 0;
-                }
-                if score >= probcut_beta {
-                    #[cfg(test)]
-                    {
-                        self.probcut_cutoffs += 1;
-                    }
-                    self.record_capture_cutoff(board, mv, depth, &[mv]);
-                    self.store(
-                        key,
-                        depth - PROBCUT_DEPTH_REDUCTION + 1,
-                        score_to_tt(score, ply),
-                        Bound::Lower,
-                        Some(mv),
-                        raw_static_eval,
-                    );
-                    return score;
-                }
-            }
+            NullMoveOutcome::Cutoff(score) => return score,
+            NullMoveOutcome::Threat(mv) => threat_move = Some(mv),
+            NullMoveOutcome::None => {}
         }
 
-        let mut singular_move = None;
-        let mut singular_extend_amount: i16 = 0;
-        let mut negative_extension_move = None;
-        if let (Some(entry), Some(tt_move)) = (entry, tt_best)
-            && next_extensions < MAX_CHECK_EXTENSIONS
-            && singular_candidate(depth, entry.depth, entry.bound(), entry.score)
-        {
-            let tt_score = score_from_tt(i32::from(entry.score), ply);
-            let singular_beta = tt_score - SINGULAR_MARGIN_PER_PLY * i32::from(depth);
-            let exclusion_depth = (depth - 1) / 2;
-            let exclusion_score = self.negamax(
+        let (raw_static_eval, static_eval, improving) = match self.eval_pruning_stage(
+            position,
+            entry,
+            depth,
+            alpha,
+            beta,
+            ply,
+            pv_node,
+            in_check,
+            excluded_move,
+        ) {
+            EvalStageOutcome::Cutoff(score) => return score,
+            EvalStageOutcome::Continue {
+                raw_static_eval,
+                static_eval,
+                improving,
+            } => (raw_static_eval, static_eval, improving),
+        };
+
+        if let Some(score) = self.try_probcut(
+            position,
+            key,
+            depth,
+            beta,
+            ply,
+            pv_node,
+            in_check,
+            excluded_move,
+            next_extensions,
+            threat_move,
+            raw_static_eval,
+        ) {
+            return score;
+        }
+
+        let (singular_move, singular_extend_amount, negative_extension_move) = match self
+            .singular_extension_stage(
                 position,
-                exclusion_depth,
-                singular_beta - 1,
-                singular_beta,
+                entry,
+                tt_best,
+                depth,
+                beta,
                 ply,
-                false,
-                false,
                 next_extensions,
                 prev_move,
-                Some(tt_move),
                 ordering_threat,
-            );
-            if self.timed_out {
-                return 0;
-            }
-            match singular_outcome(exclusion_score, singular_beta, tt_score, beta, depth) {
-                SingularOutcome::Extend(amount) => {
-                    singular_move = Some(tt_move);
-                    singular_extend_amount = amount;
-                }
-                SingularOutcome::MultiCut => return singular_beta,
-                SingularOutcome::Reduce => negative_extension_move = Some(tt_move),
-                SingularOutcome::None => {}
-            }
-        }
+            ) {
+            SingularStageOutcome::Cutoff(score) => return score,
+            SingularStageOutcome::Extension {
+                singular_move,
+                singular_extend_amount,
+                negative_extension_move,
+            } => (
+                singular_move,
+                singular_extend_amount,
+                negative_extension_move,
+            ),
+        };
 
         let countermove =
             prev_move.and_then(|p| decode_move(self.countermove[p.from as usize][p.to as usize]));
@@ -1262,6 +1164,315 @@ impl SearchCore {
             );
         }
         best_score
+    }
+
+    /// Null-move pruning probe run at the top of `negamax`, before the move
+    /// loop. Returns a cutoff score, a threat move discovered when the probe
+    /// failed low, or `None` when the probe didn't run at all.
+    #[allow(clippy::too_many_arguments)]
+    fn try_null_move_pruning(
+        &mut self,
+        position: &SearchPosition,
+        depth: i16,
+        beta: i32,
+        ply: usize,
+        pv_node: bool,
+        in_check: bool,
+        allow_null: bool,
+        next_extensions: u8,
+        prev_move: Option<Move>,
+        ordering_threat: Option<Move>,
+    ) -> NullMoveOutcome {
+        let board = position.board();
+        if !(allow_null
+            && !pv_node
+            && !in_check
+            && depth >= NULL_MOVE_MIN_DEPTH
+            && beta.abs() < MATE_SCORE - MAX_PLY as i32
+            && board.halfmove_clock() < NULL_MOVE_HALFMOVE_LIMIT
+            && has_non_pawn_material(board, board.side_to_move()))
+        {
+            return NullMoveOutcome::None;
+        }
+        let Some(null_position) = position.null_child() else {
+            return NullMoveOutcome::None;
+        };
+        let reduction = NULL_MOVE_BASE_REDUCTION + depth / NULL_MOVE_DEPTH_DIVISOR;
+        let previous_null_boundary = self.null_boundary;
+        self.null_boundary = Some(self.path.len());
+        self.path.push(null_position.repetition_key());
+        let null_score = -self.negamax(
+            &null_position,
+            depth - 1 - reduction,
+            -beta,
+            -beta + 1,
+            ply + 1,
+            false,
+            false,
+            next_extensions,
+            None,
+            None,
+            None,
+        );
+        let null_threat = self.null_threat(null_position.board(), ply + 1);
+        self.path.pop();
+        self.null_boundary = previous_null_boundary;
+        if self.timed_out {
+            return NullMoveOutcome::Cutoff(0);
+        }
+        if null_score >= beta {
+            if requires_null_verification(depth) {
+                #[cfg(test)]
+                {
+                    self.null_verifications += 1;
+                }
+                let verification_score = self.negamax(
+                    position,
+                    depth - reduction,
+                    beta - 1,
+                    beta,
+                    ply,
+                    true,
+                    false,
+                    next_extensions,
+                    prev_move,
+                    None,
+                    ordering_threat,
+                );
+                if self.timed_out {
+                    return NullMoveOutcome::Cutoff(0);
+                }
+                if verification_score >= beta {
+                    return NullMoveOutcome::Cutoff(verification_score);
+                }
+                NullMoveOutcome::None
+            } else {
+                NullMoveOutcome::Cutoff(if board.generate_moves(|_| true) {
+                    null_score
+                } else {
+                    0
+                })
+            }
+        } else {
+            match null_threat {
+                Some(mv) => NullMoveOutcome::Threat(mv),
+                None => NullMoveOutcome::None,
+            }
+        }
+    }
+
+    /// Computes the static eval and applies reverse-futility/razoring
+    /// pruning. Returns either a cutoff score, or the eval state (`static_eval`
+    /// possibly lazily filled in by the pruning checks) the move loop and TT
+    /// store further down `negamax` need.
+    #[allow(clippy::too_many_arguments)]
+    fn eval_pruning_stage(
+        &mut self,
+        position: &SearchPosition,
+        entry: Option<TTEntry>,
+        depth: i16,
+        alpha: i32,
+        beta: i32,
+        ply: usize,
+        pv_node: bool,
+        in_check: bool,
+        excluded_move: Option<Move>,
+    ) -> EvalStageOutcome {
+        let board = position.board();
+        let raw_static_eval = if in_check {
+            None
+        } else {
+            Some(
+                entry
+                    .and_then(TTEntry::static_eval)
+                    .unwrap_or_else(|| self.raw_evaluate(position)),
+            )
+        };
+        let mut static_eval = raw_static_eval.map(|raw| self.corrected_static_eval(position, raw));
+        let improving = static_eval.and_then(|eval| self.record_static_eval(ply, eval));
+        if static_eval.is_none() {
+            self.static_evals[ply] = i16::MIN;
+        }
+        if !pv_node
+            && !in_check
+            && excluded_move.is_none()
+            && depth <= RFP_MAX_DEPTH
+            && beta.abs() < MATE_SCORE - MAX_PLY as i32
+        {
+            let eval = *static_eval.get_or_insert_with(|| self.raw_evaluate(position));
+            static_eval = Some(eval);
+            if eval - rfp_margin(depth, improving, self.rfp_margin_per_ply()) >= beta {
+                let score = if board.generate_moves(|_| true) {
+                    eval
+                } else {
+                    0
+                };
+                return EvalStageOutcome::Cutoff(score);
+            }
+        }
+
+        if !pv_node
+            && !in_check
+            && excluded_move.is_none()
+            && depth <= RAZOR_MAX_DEPTH
+            && beta.abs() < MATE_SCORE - MAX_PLY as i32
+        {
+            let eval = *static_eval.get_or_insert_with(|| self.raw_evaluate(position));
+            if eval + RAZOR_MARGIN_BASE + RAZOR_MARGIN_PER_PLY * i32::from(depth) <= alpha {
+                let score = self.quiescence(position, alpha, alpha + 1, ply);
+                if self.timed_out {
+                    return EvalStageOutcome::Cutoff(0);
+                }
+                if score <= alpha {
+                    return EvalStageOutcome::Cutoff(score);
+                }
+            }
+        }
+
+        EvalStageOutcome::Continue {
+            raw_static_eval,
+            static_eval,
+            improving,
+        }
+    }
+
+    /// ProbCut: searches good captures at a reduced depth to see if they beat
+    /// `beta + margin`, returning `Some(score)` on a cutoff.
+    #[allow(clippy::too_many_arguments)]
+    fn try_probcut(
+        &mut self,
+        position: &SearchPosition,
+        key: u64,
+        depth: i16,
+        beta: i32,
+        ply: usize,
+        pv_node: bool,
+        in_check: bool,
+        excluded_move: Option<Move>,
+        next_extensions: u8,
+        threat_move: Option<Move>,
+        raw_static_eval: Option<i32>,
+    ) -> Option<i32> {
+        let board = position.board();
+        let probcut_margin = self.probcut_margin();
+        if !should_probcut(
+            depth,
+            beta,
+            pv_node,
+            in_check,
+            excluded_move.is_some(),
+            probcut_margin,
+        ) {
+            return None;
+        }
+        let probcut_beta = beta + probcut_margin;
+        let mut captures = QuiescencePicker::new(board, false, self, ply, None);
+        while let Some(picked) = captures.next(board) {
+            let mv = picked.mv;
+            if !picked.capture || !picked.see_good {
+                continue;
+            }
+            let child = position.child(mv);
+            self.path.push(child.repetition_key());
+            let score = -self.negamax(
+                &child,
+                depth - PROBCUT_DEPTH_REDUCTION,
+                -probcut_beta,
+                -probcut_beta + 1,
+                ply + 1,
+                false,
+                true,
+                next_extensions,
+                Some(mv),
+                None,
+                threat_move,
+            );
+            self.path.pop();
+            if self.timed_out {
+                return Some(0);
+            }
+            if score >= probcut_beta {
+                #[cfg(test)]
+                {
+                    self.probcut_cutoffs += 1;
+                }
+                self.record_capture_cutoff(board, mv, depth, &[mv]);
+                self.store(
+                    key,
+                    depth - PROBCUT_DEPTH_REDUCTION + 1,
+                    score_to_tt(score, ply),
+                    Bound::Lower,
+                    Some(mv),
+                    raw_static_eval,
+                );
+                return Some(score);
+            }
+        }
+        None
+    }
+
+    /// Probes whether the TT move is singular (the only move that avoids a
+    /// fail-low), extending it if so, multi-cutting when several moves beat
+    /// `singular_beta`, or applying a negative extension otherwise.
+    #[allow(clippy::too_many_arguments)]
+    fn singular_extension_stage(
+        &mut self,
+        position: &SearchPosition,
+        entry: Option<TTEntry>,
+        tt_best: Option<Move>,
+        depth: i16,
+        beta: i32,
+        ply: usize,
+        next_extensions: u8,
+        prev_move: Option<Move>,
+        ordering_threat: Option<Move>,
+    ) -> SingularStageOutcome {
+        let no_extension = SingularStageOutcome::Extension {
+            singular_move: None,
+            singular_extend_amount: 0,
+            negative_extension_move: None,
+        };
+        let (Some(entry), Some(tt_move)) = (entry, tt_best) else {
+            return no_extension;
+        };
+        if !(next_extensions < MAX_CHECK_EXTENSIONS
+            && singular_candidate(depth, entry.depth, entry.bound(), entry.score))
+        {
+            return no_extension;
+        }
+        let tt_score = score_from_tt(i32::from(entry.score), ply);
+        let singular_beta = tt_score - SINGULAR_MARGIN_PER_PLY * i32::from(depth);
+        let exclusion_depth = (depth - 1) / 2;
+        let exclusion_score = self.negamax(
+            position,
+            exclusion_depth,
+            singular_beta - 1,
+            singular_beta,
+            ply,
+            false,
+            false,
+            next_extensions,
+            prev_move,
+            Some(tt_move),
+            ordering_threat,
+        );
+        if self.timed_out {
+            return SingularStageOutcome::Cutoff(0);
+        }
+        match singular_outcome(exclusion_score, singular_beta, tt_score, beta, depth) {
+            SingularOutcome::Extend(amount) => SingularStageOutcome::Extension {
+                singular_move: Some(tt_move),
+                singular_extend_amount: amount,
+                negative_extension_move: None,
+            },
+            SingularOutcome::MultiCut => SingularStageOutcome::Cutoff(singular_beta),
+            SingularOutcome::Reduce => SingularStageOutcome::Extension {
+                singular_move: None,
+                singular_extend_amount: 0,
+                negative_extension_move: Some(tt_move),
+            },
+            SingularOutcome::None => no_extension,
+        }
     }
 
     fn quiescence(

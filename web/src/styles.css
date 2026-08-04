@@ -7,7 +7,7 @@
     system-ui,
     -apple-system,
     BlinkMacSystemFont,
-    "Segoe UI",
+    'Segoe UI',
     sans-serif;
   font-synthesis: none;
 }
@@ -258,7 +258,7 @@ aside {
   border-bottom: 1px solid #34332e;
   color: #c6c5bf;
   background: transparent;
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: 'SFMono-Regular', Consolas, monospace;
   font-size: 12px;
   line-height: 1.45;
 }
@@ -344,7 +344,7 @@ select {
   border: 1px solid #45433d;
   border-radius: 5px;
 }
-input[type="range"] {
+input[type='range'] {
   width: 100%;
   margin-top: 10px;
   accent-color: #8dbb4e;
@@ -438,7 +438,7 @@ button.primary {
   font-weight: 600;
 }
 .compare-form select,
-.compare-form input[type="number"] {
+.compare-form input[type='number'] {
   width: 100%;
   min-height: 39px;
   margin-top: 6px;
@@ -528,7 +528,7 @@ button.danger {
 .summary-grid span {
   margin-top: 4px;
   color: #999892;
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: 'SFMono-Regular', Consolas, monospace;
   font-size: 10px;
 }
 .compare-results > .error-message {
