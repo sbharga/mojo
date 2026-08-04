@@ -1,0 +1,138 @@
+\relax 
+\providecommand\zref@newlabel[2]{}
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\citation{shannon1950chess}
+\citation{mojo2026software}
+\citation{knuth1975alphabeta}
+\citation{marsland1987sss}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Background and Related Work}{1}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Game-tree search}{1}{subsection.2.1}\protected@file@percent }
+\newlabel{eq:negamax}{{1}{1}{Game-tree search}{equation.1}{}}
+\newlabel{eq:negamax@cref}{{[equation][1][]1}{[1][1][]1}{}{}{}}
+\citation{beal1990quiescence}
+\citation{donninger1993null}
+\citation{heinz1998futility}
+\citation{buro1995probcut}
+\citation{anantharaman1990singular}
+\citation{zobrist1970hashing}
+\citation{breuker1994tt}
+\citation{cozychess2026}
+\citation{buro1995features}
+\citation{spall1992spsa}
+\citation{wald1945sprt}
+\citation{thompson1986retrograde}
+\citation{haas2017wasm}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Evaluation, tuning, and testing}{2}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}System Architecture}{2}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Search Design}{2}{section.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Iterative deepening and root search}{2}{subsection.4.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces \textsc  {Mojo}{} execution architecture. The move and analysis workers own separate engine instances; the common-design box denotes shared implementation, not shared runtime state. The dashed arrow is an offline configuration path.}}{3}{figure.1}\protected@file@percent }
+\newlabel{fig:architecture}{{1}{3}{\engine {} execution architecture. The move and analysis workers own separate engine instances; the common-design box denotes shared implementation, not shared runtime state. The dashed arrow is an offline configuration path}{figure.1}{}}
+\newlabel{fig:architecture@cref}{{[figure][1][]1}{[1][2][]3}{}{}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Search control flow. The ordering is significant: cheap bound and static tests precede move construction, while reduced searches are verified when they can change alpha.}}{3}{figure.2}\protected@file@percent }
+\newlabel{fig:search-flow}{{2}{3}{Search control flow. The ordering is significant: cheap bound and static tests precede move construction, while reduced searches are verified when they can change alpha}{figure.2}{}}
+\newlabel{fig:search-flow@cref}{{[figure][2][]2}{[1][2][]3}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Transpositions, draws, and terminal scores}{3}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Ordering and selective search}{3}{subsection.4.3}\protected@file@percent }
+\citation{donninger1993null}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Selective mechanisms in \textsc  {Mojo}{}. The safeguards are part of the algorithm: they constrain where a heuristic assumption may discard or reduce work.}}{4}{table.1}\protected@file@percent }
+\newlabel{tab:selectivity}{{1}{4}{Selective mechanisms in \engine {}. The safeguards are part of the algorithm: they constrain where a heuristic assumption may discard or reduce work}{table.1}{}}
+\newlabel{tab:selectivity@cref}{{[table][1][]1}{[1][3][]4}{}{}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Evaluation and Learning}{4}{section.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Tapered handcrafted evaluation}{4}{subsection.5.1}\protected@file@percent }
+\newlabel{eq:taper}{{2}{4}{Tapered handcrafted evaluation}{equation.2}{}}
+\newlabel{eq:taper@cref}{{[equation][2][]2}{[1][4][]4}{}{}{}}
+\citation{thompson1986retrograde}
+\citation{buro1995features}
+\citation{spall1992spsa}
+\citation{wald1945sprt}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Correction history}{5}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Offline parameter fitting}{5}{subsection.5.3}\protected@file@percent }
+\newlabel{eq:logistic}{{3}{5}{Offline parameter fitting}{equation.3}{}}
+\newlabel{eq:logistic@cref}{{[equation][3][]3}{[1][5][]5}{}{}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Experimental Method}{5}{section.6}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Fixed-depth-9 single-PV throughput. Bars use seven samples after two warmups. Equal node counts make each pair a direct timing comparison.}}{6}{figure.3}\protected@file@percent }
+\newlabel{fig:throughput}{{3}{6}{Fixed-depth-9 single-PV throughput. Bars use seven samples after two warmups. Equal node counts make each pair a direct timing comparison}{figure.3}{}}
+\newlabel{fig:throughput@cref}{{[figure][3][]3}{[1][6][]6}{}{}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {7}Results}{6}{section.7}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Completed single-PV depth under nominal move budgets. Values are medians of three fresh-engine samples; early stopping and timed-out next iterations are part of the measured policy.}}{6}{figure.4}\protected@file@percent }
+\newlabel{fig:timed-depth}{{4}{6}{Completed single-PV depth under nominal move budgets. Values are medians of three fresh-engine samples; early stopping and timed-out next iterations are part of the measured policy}{figure.4}{}}
+\newlabel{fig:timed-depth@cref}{{[figure][4][]4}{[1][6][]6}{}{}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Wasm artifact and memory measurements. MiB values use $2^{20}$ bytes.}}{6}{table.2}\protected@file@percent }
+\newlabel{tab:artifacts}{{2}{6}{Wasm artifact and memory measurements. MiB values use $2^{20}$ bytes}{table.2}{}}
+\newlabel{tab:artifacts@cref}{{[table][2][]2}{[1][6][]6}{}{}{}}
+\bibstyle{plainnat}
+\bibdata{references}
+\bibcite{cozychess2026}{{1}{2026}{{analog-hors}}{{}}}
+\bibcite{anantharaman1990singular}{{2}{1990}{{Anantharaman et~al.}}{{Anantharaman, Campbell, and Hsu}}}
+\bibcite{beal1990quiescence}{{3}{1990}{{Beal}}{{}}}
+\bibcite{breuker1994tt}{{4}{1994}{{Breuker et~al.}}{{Breuker, Uiterwijk, and van~den Herik}}}
+\bibcite{buro1995features}{{5}{1995{a}}{{Buro}}{{}}}
+\bibcite{buro1995probcut}{{6}{1995{b}}{{Buro}}{{}}}
+\@writefile{toc}{\contentsline {section}{\numberline {8}Discussion and Limitations}{7}{section.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {9}Conclusion}{7}{section.9}\protected@file@percent }
+\bibcite{donninger1993null}{{7}{1993}{{Donninger}}{{}}}
+\bibcite{haas2017wasm}{{8}{2017}{{Haas et~al.}}{{Haas, Rossberg, Schuff, Titzer, Holman, Gohman, Wagner, Zakai, and Bastien}}}
+\bibcite{heinz1998futility}{{9}{1998}{{Heinz}}{{}}}
+\bibcite{knuth1975alphabeta}{{10}{1975}{{Knuth and Moore}}{{}}}
+\bibcite{marsland1987sss}{{11}{1987}{{Marsland et~al.}}{{Marsland, Reinefeld, and Schaeffer}}}
+\bibcite{mojo2026software}{{12}{2026}{{sbharga}}{{}}}
+\bibcite{shannon1950chess}{{13}{1950}{{Shannon}}{{}}}
+\bibcite{spall1992spsa}{{14}{1992}{{Spall}}{{}}}
+\bibcite{thompson1986retrograde}{{15}{1986}{{Thompson}}{{}}}
+\bibcite{wald1945sprt}{{16}{1945}{{Wald}}{{}}}
+\bibcite{zobrist1970hashing}{{17}{1970}{{Zobrist}}{{}}}
+\gdef \@PBprevLastPage{8}
+\csdimgdef {@PBunbalpgVIIIHeight}{686.56499pt}
+\csdimgdef {@PBunbalpgVIIILeftHeight}{686.56499pt}
+\csdimgdef {@PBunbalpgVIIILeftFloatsHeight}{0.0pt}
+\csdimgdef {@PBunbalpgVIIIRightHeight}{686.56499pt}
+\csdimgdef {@PBunbalpgVIIIRightFloatsHeight}{0.0pt}
+\csdimgdef {@PBunbalpgVIIIUsedLeft}{627.94443pt}
+\csdimgdef {@PBunbalpgVIIIUsedRight}{10.0pt}
+\providetoggle {@PBunbalpgVIIIHasFloats}
+\global \togglefalse {@PBunbalpgVIIIHasFloats}
+\providetoggle {@PBunbalpgVIIIHasFloatcol}
+\global \togglefalse {@PBunbalpgVIIIHasFloatcol}
+\providetoggle {@PBunbalpgVIIIHasFootnotes}
+\global \togglefalse {@PBunbalpgVIIIHasFootnotes}
+\providetoggle {@PBunbalpgVIIIHasMarginpars}
+\global \togglefalse {@PBunbalpgVIIIHasMarginpars}
+\ExplSyntaxOn
+\seq_gclear_new:c{@PBunbalpgVIIILeftFloatHeights}
+\ExplSyntaxOff
+\ExplSyntaxOn
+\seq_gclear_new:c{@PBunbalpgVIIILeftFloatSpacesBelow}
+\ExplSyntaxOff
+\providetoggle {@PBpgVIIIalreadyBalanced}
+\global \toggletrue {@PBpgVIIIalreadyBalanced}
+\csdimgdef {@PBbalpgVIIIHeight}{686.56499pt}
+\csdimgdef {@PBbalpgVIIILeftHeight}{686.56499pt}
+\csdimgdef {@PBbalpgVIIILeftFloatsHeight}{0.0pt}
+\csdimgdef {@PBbalpgVIIIRightHeight}{1373.12997pt}
+\csdimgdef {@PBbalpgVIIIRightFloatsHeight}{0.0pt}
+\csdimgdef {@PBbalpgVIIIUsedLeft}{627.94443pt}
+\csdimgdef {@PBbalpgVIIIUsedRight}{627.94443pt}
+\providetoggle {@PBbalpgVIIIHasFloats}
+\global \togglefalse {@PBbalpgVIIIHasFloats}
+\providetoggle {@PBbalpgVIIIHasFloatcol}
+\global \togglefalse {@PBbalpgVIIIHasFloatcol}
+\providetoggle {@PBbalpgVIIIHasFootnotes}
+\global \togglefalse {@PBbalpgVIIIHasFootnotes}
+\providetoggle {@PBbalpgVIIIHasMarginpars}
+\global \togglefalse {@PBbalpgVIIIHasMarginpars}
+\ExplSyntaxOn
+\seq_gclear_new:c{@PBbalpgVIIILeftFloatHeights}
+\ExplSyntaxOff
+\ExplSyntaxOn
+\seq_gclear_new:c{@PBbalpgVIIILeftFloatSpacesBelow}
+\ExplSyntaxOff
+\providetoggle {@PBstabilized}
+\global \toggletrue {@PBstabilized}
+\providetoggle {@PBimpossible}
+\global \togglefalse {@PBimpossible}
+\gdef \@PBprevLastPhysPage{8}
+\gdef \@abspage@last{8}

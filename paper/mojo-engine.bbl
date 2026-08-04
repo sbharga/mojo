@@ -1,0 +1,133 @@
+\begin{thebibliography}{17}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[{analog-hors}(2026)]{cozychess2026}
+{analog-hors}.
+\newblock cozy-chess: Chess move generation and position representation for
+  {Rust}.
+\newblock Software, version 0.3.4, 2026.
+\newblock URL \url{https://github.com/analog-hors/cozy-chess}.
+\newblock Accessed 2026-08-04.
+
+\bibitem[Anantharaman et~al.(1990)Anantharaman, Campbell, and
+  Hsu]{anantharaman1990singular}
+Thomas Anantharaman, Murray~S. Campbell, and Feng-hsiung Hsu.
+\newblock Singular extensions: Adding selectivity to brute-force searching.
+\newblock \emph{Artificial Intelligence}, 43\penalty0 (1):\penalty0 99--109,
+  1990.
+\newblock \doi{10.1016/0004-3702(90)90073-9}.
+
+\bibitem[Beal(1990)]{beal1990quiescence}
+Don~F. Beal.
+\newblock A generalised quiescence search algorithm.
+\newblock \emph{Artificial Intelligence}, 43\penalty0 (1):\penalty0 85--98,
+  1990.
+\newblock \doi{10.1016/0004-3702(90)90072-8}.
+
+\bibitem[Breuker et~al.(1994)Breuker, Uiterwijk, and van~den
+  Herik]{breuker1994tt}
+Dennis~M. Breuker, Jos W. H.~M. Uiterwijk, and H.~Jaap van~den Herik.
+\newblock Replacement schemes for transposition tables.
+\newblock \emph{ICCA Journal}, 17\penalty0 (4):\penalty0 183--193, 1994.
+\newblock \doi{10.3233/ICG-1994-17402}.
+
+\bibitem[Buro(1995{\natexlab{a}})]{buro1995features}
+Michael Buro.
+\newblock Statistical feature combination for the evaluation of game positions.
+\newblock \emph{Journal of Artificial Intelligence Research}, 3:\penalty0
+  373--382, 1995{\natexlab{a}}.
+\newblock \doi{10.1613/JAIR.179}.
+
+\bibitem[Buro(1995{\natexlab{b}})]{buro1995probcut}
+Michael Buro.
+\newblock {ProbCut}: An effective selective extension of the alpha-beta
+  algorithm.
+\newblock \emph{ICCA Journal}, 18\penalty0 (2):\penalty0 71--76,
+  1995{\natexlab{b}}.
+\newblock \doi{10.3233/ICG-1995-18202}.
+
+\bibitem[Donninger(1993)]{donninger1993null}
+Christian Donninger.
+\newblock Null move and deep search: Selective-search heuristics for obtuse
+  chess programs.
+\newblock \emph{ICCA Journal}, 16\penalty0 (3):\penalty0 137--143, 1993.
+\newblock \doi{10.3233/ICG-1993-16304}.
+
+\bibitem[Haas et~al.(2017)Haas, Rossberg, Schuff, Titzer, Holman, Gohman,
+  Wagner, Zakai, and Bastien]{haas2017wasm}
+Andreas Haas, Andreas Rossberg, Derek~L. Schuff, Ben~L. Titzer, Michael Holman,
+  Dan Gohman, Luke Wagner, Alon Zakai, and J.~F. Bastien.
+\newblock Bringing the web up to speed with {WebAssembly}.
+\newblock In \emph{Proceedings of the 38th ACM SIGPLAN Conference on
+  Programming Language Design and Implementation}, pages 185--200. ACM, 2017.
+\newblock \doi{10.1145/3062341.3062363}.
+
+\bibitem[Heinz(1998)]{heinz1998futility}
+Ernst~A. Heinz.
+\newblock Extended futility pruning.
+\newblock \emph{ICCA Journal}, 21\penalty0 (2):\penalty0 75--83, 1998.
+\newblock \doi{10.3233/ICG-1998-21202}.
+
+\bibitem[Knuth and Moore(1975)]{knuth1975alphabeta}
+Donald~E. Knuth and Ronald~W. Moore.
+\newblock An analysis of alpha-beta pruning.
+\newblock \emph{Artificial Intelligence}, 6\penalty0 (4):\penalty0 293--326,
+  1975.
+\newblock \doi{10.1016/0004-3702(75)90019-3}.
+
+\bibitem[Marsland et~al.(1987)Marsland, Reinefeld, and
+  Schaeffer]{marsland1987sss}
+T.~Anthony Marsland, Alexander Reinefeld, and Jonathan Schaeffer.
+\newblock Low overhead alternatives to {SSS*}.
+\newblock \emph{Artificial Intelligence}, 31\penalty0 (2):\penalty0 185--199,
+  1987.
+\newblock URL \url{https://webdocs.cs.ualberta.ca/~tony/OldPapers/ai87.pdf}.
+
+\bibitem[{sbharga}(2026)]{mojo2026software}
+{sbharga}.
+\newblock Mojo: A rust and {WebAssembly} chess engine.
+\newblock Software, revision aeb6b5b, 2026.
+\newblock URL \url{https://github.com/sbharga/mojo}.
+\newblock Accessed 2026-08-04.
+
+\bibitem[Shannon(1950)]{shannon1950chess}
+Claude~E. Shannon.
+\newblock Programming a computer for playing chess.
+\newblock \emph{The London, Edinburgh, and Dublin Philosophical Magazine and
+  Journal of Science}, 41\penalty0 (314):\penalty0 256--275, 1950.
+\newblock \doi{10.1080/14786445008521796}.
+
+\bibitem[Spall(1992)]{spall1992spsa}
+James~C. Spall.
+\newblock Multivariate stochastic approximation using a simultaneous
+  perturbation gradient approximation.
+\newblock \emph{IEEE Transactions on Automatic Control}, 37\penalty0
+  (3):\penalty0 332--341, 1992.
+\newblock \doi{10.1109/9.119632}.
+
+\bibitem[Thompson(1986)]{thompson1986retrograde}
+Ken Thompson.
+\newblock Retrograde analysis of certain endgames.
+\newblock \emph{ICCA Journal}, 9\penalty0 (3):\penalty0 131--139, 1986.
+\newblock \doi{10.3233/ICG-1986-9302}.
+
+\bibitem[Wald(1945)]{wald1945sprt}
+Abraham Wald.
+\newblock Sequential tests of statistical hypotheses.
+\newblock \emph{The Annals of Mathematical Statistics}, 16\penalty0
+  (2):\penalty0 117--186, 1945.
+\newblock \doi{10.1214/aoms/1177731118}.
+
+\bibitem[Zobrist(1970)]{zobrist1970hashing}
+Albert~L. Zobrist.
+\newblock A new hashing method with application for game playing.
+\newblock Technical Report~88, Computer Sciences Department, University of
+  Wisconsin--Madison, 1970.
+\newblock URL
+  \url{https://research.cs.wisc.edu/techreports/viewreport.php?report=88}.
+
+\end{thebibliography}
