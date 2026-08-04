@@ -1,0 +1,3 @@
+variant,raw_bytes,gzip_bytes,brotli_bytes,initial_memory_bytes,peak_memory_bytes
+Baseline,1456876,223268,132934,2686976,20643840
+SIMD,1459636,223553,133266,2686976,20643840
