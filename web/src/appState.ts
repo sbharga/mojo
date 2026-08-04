@@ -1,5 +1,6 @@
 import { Chess } from 'chess.js'
 import type { EngineMode, Side } from './engine/types'
+import { MIN_STOCKFISH_ELO, MAX_STOCKFISH_ELO } from './engine/stockfishClient'
 
 export const DEFAULT_SETTINGS = {
   mode: 'human-engine' as EngineMode,
@@ -12,10 +13,8 @@ export const DEFAULT_SETTINGS = {
   showBestMove: true,
 }
 
-const MIN_THINK_TIME_MS = 100
-const MAX_THINK_TIME_MS = 10_000
-const MIN_STOCKFISH_ELO = 1320
-const MAX_STOCKFISH_ELO = 3190
+export const MIN_THINK_TIME_MS = 100
+export const MAX_THINK_TIME_MS = 10_000
 
 type StorageReader = Pick<Storage, 'getItem'>
 type StorageWriter = Pick<Storage, 'setItem'>
@@ -27,26 +26,39 @@ export function loadSettings(storage: StorageReader): typeof DEFAULT_SETTINGS {
     if (!raw) return DEFAULT_SETTINGS
     const value = JSON.parse(raw) as Record<string, unknown>
     return {
-      mode: value.mode === 'human-engine' || value.mode === 'human-stockfish' || value.mode === 'engine-engine' || value.mode === 'mojo-stockfish' || value.mode === 'human-human'
-        ? value.mode
-        : DEFAULT_SETTINGS.mode,
-      humanSide: value.humanSide === 'white' || value.humanSide === 'black'
-        ? value.humanSide
-        : DEFAULT_SETTINGS.humanSide,
-      thinkTime: typeof value.thinkTime === 'number' && Number.isFinite(value.thinkTime)
-        ? Math.min(MAX_THINK_TIME_MS, Math.max(MIN_THINK_TIME_MS, value.thinkTime))
-        : DEFAULT_SETTINGS.thinkTime,
-      stockfishElo: typeof value.stockfishElo === 'number' && Number.isFinite(value.stockfishElo)
-        ? Math.round(Math.min(MAX_STOCKFISH_ELO, Math.max(MIN_STOCKFISH_ELO, value.stockfishElo)))
-        : DEFAULT_SETTINGS.stockfishElo,
-      stockfishThinkTime: typeof value.stockfishThinkTime === 'number' && Number.isFinite(value.stockfishThinkTime)
-        ? Math.min(MAX_THINK_TIME_MS, Math.max(MIN_THINK_TIME_MS, value.stockfishThinkTime))
-        : DEFAULT_SETTINGS.stockfishThinkTime,
-      stockfishSide: value.stockfishSide === 'white' || value.stockfishSide === 'black'
-        ? value.stockfishSide
-        : DEFAULT_SETTINGS.stockfishSide,
+      mode:
+        value.mode === 'human-engine' ||
+        value.mode === 'human-stockfish' ||
+        value.mode === 'engine-engine' ||
+        value.mode === 'mojo-stockfish' ||
+        value.mode === 'human-human'
+          ? value.mode
+          : DEFAULT_SETTINGS.mode,
+      humanSide:
+        value.humanSide === 'white' || value.humanSide === 'black'
+          ? value.humanSide
+          : DEFAULT_SETTINGS.humanSide,
+      thinkTime:
+        typeof value.thinkTime === 'number' && Number.isFinite(value.thinkTime)
+          ? Math.min(MAX_THINK_TIME_MS, Math.max(MIN_THINK_TIME_MS, value.thinkTime))
+          : DEFAULT_SETTINGS.thinkTime,
+      stockfishElo:
+        typeof value.stockfishElo === 'number' && Number.isFinite(value.stockfishElo)
+          ? Math.round(Math.min(MAX_STOCKFISH_ELO, Math.max(MIN_STOCKFISH_ELO, value.stockfishElo)))
+          : DEFAULT_SETTINGS.stockfishElo,
+      stockfishThinkTime:
+        typeof value.stockfishThinkTime === 'number' && Number.isFinite(value.stockfishThinkTime)
+          ? Math.min(MAX_THINK_TIME_MS, Math.max(MIN_THINK_TIME_MS, value.stockfishThinkTime))
+          : DEFAULT_SETTINGS.stockfishThinkTime,
+      stockfishSide:
+        value.stockfishSide === 'white' || value.stockfishSide === 'black'
+          ? value.stockfishSide
+          : DEFAULT_SETTINGS.stockfishSide,
       flipped: typeof value.flipped === 'boolean' ? value.flipped : DEFAULT_SETTINGS.flipped,
-      showBestMove: typeof value.showBestMove === 'boolean' ? value.showBestMove : DEFAULT_SETTINGS.showBestMove,
+      showBestMove:
+        typeof value.showBestMove === 'boolean'
+          ? value.showBestMove
+          : DEFAULT_SETTINGS.showBestMove,
     }
   } catch {
     return DEFAULT_SETTINGS
@@ -68,7 +80,11 @@ export function loadGame(storage: StorageReader): Chess {
   return new Chess()
 }
 
-export function saveSession(storage: StorageWriter, settings: typeof DEFAULT_SETTINGS, game: Chess) {
+export function saveSession(
+  storage: StorageWriter,
+  settings: typeof DEFAULT_SETTINGS,
+  game: Chess,
+) {
   try {
     storage.setItem('mojo-settings', JSON.stringify(settings))
     storage.setItem('mojo-game', game.pgn())

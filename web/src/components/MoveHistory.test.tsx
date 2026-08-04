@@ -14,7 +14,13 @@ describe('MoveHistory', () => {
     const game = new Chess('8/8/8/8/8/4k3/8/4K3 b - - 0 12')
     game.move('Kf3')
     const navigate = vi.fn()
-    render(<MoveHistory history={game.history({ verbose: true })} currentPly={0} onNavigate={navigate} />)
+    render(
+      <MoveHistory
+        history={game.history({ verbose: true })}
+        currentPly={0}
+        onNavigate={navigate}
+      />,
+    )
 
     expect(screen.getByText('12.')).toBeTruthy()
     await user.click(screen.getByRole('button', { name: 'Go to 12... Kf3' }))
@@ -27,7 +33,13 @@ describe('MoveHistory', () => {
     game.move('e4')
     game.move('e5')
     const navigate = vi.fn()
-    render(<MoveHistory history={game.history({ verbose: true })} currentPly={1} onNavigate={navigate} />)
+    render(
+      <MoveHistory
+        history={game.history({ verbose: true })}
+        currentPly={1}
+        onNavigate={navigate}
+      />,
+    )
 
     await user.click(screen.getByRole('button', { name: 'Go to start' }))
     await user.click(screen.getByRole('button', { name: 'Previous move' }))

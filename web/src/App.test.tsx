@@ -9,7 +9,36 @@ import App from './App'
 const stockfishMock = vi.hoisted(() => ({ start: vi.fn(), cancel: vi.fn() }))
 
 vi.mock('react-chessboard', () => ({
-  Chessboard: ({ options }: { options: { position?: string; onPieceDrop?: ({ piece, sourceSquare, targetSquare }: { piece: { pieceType: string }; sourceSquare: string; targetSquare: string | null }) => boolean } }) => <div data-testid="chessboard" data-position={options.position}><button onClick={() => options.onPieceDrop?.({ piece: { pieceType: 'bP' }, sourceSquare: 'c7', targetSquare: 'c5' })}>Play c5</button></div>,
+  Chessboard: ({
+    options,
+  }: {
+    options: {
+      position?: string
+      onPieceDrop?: ({
+        piece,
+        sourceSquare,
+        targetSquare,
+      }: {
+        piece: { pieceType: string }
+        sourceSquare: string
+        targetSquare: string | null
+      }) => boolean
+    }
+  }) => (
+    <div data-testid="chessboard" data-position={options.position}>
+      <button
+        onClick={() =>
+          options.onPieceDrop?.({
+            piece: { pieceType: 'bP' },
+            sourceSquare: 'c7',
+            targetSquare: 'c5',
+          })
+        }
+      >
+        Play c5
+      </button>
+    </div>
+  ),
 }))
 
 vi.mock('./engine/useEngine', () => ({
@@ -123,12 +152,15 @@ describe('App', () => {
     const game = new Chess()
     game.move('e4')
     localStorage.setItem('mojo-game', game.pgn())
-    localStorage.setItem('mojo-settings', JSON.stringify({
-      mode: 'human-stockfish',
-      humanSide: 'white',
-      stockfishElo: 2250,
-      stockfishThinkTime: 900,
-    }))
+    localStorage.setItem(
+      'mojo-settings',
+      JSON.stringify({
+        mode: 'human-stockfish',
+        humanSide: 'white',
+        stockfishElo: 2250,
+        stockfishThinkTime: 900,
+      }),
+    )
 
     render(<App />)
 

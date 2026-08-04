@@ -53,7 +53,10 @@ describe('summarizeGames', () => {
 
   it('crosses both paired SPRT decision bounds', () => {
     const wins = Array.from({ length: 30 }, (_, pair) => [result(pair, 1), result(pair, 1)]).flat()
-    const losses = Array.from({ length: 30 }, (_, pair) => [result(pair, 0), result(pair, 0)]).flat()
+    const losses = Array.from({ length: 30 }, (_, pair) => [
+      result(pair, 0),
+      result(pair, 0),
+    ]).flat()
     expect(summarizeGames(wins).decision).toBe('Candidate is at least +10 Elo')
     expect(summarizeGames(losses).decision).toBe('Candidate improvement rejected')
   })
@@ -62,9 +65,15 @@ describe('summarizeGames', () => {
 describe('playGame', () => {
   it('records a terminal opening without asking either engine to search', () => {
     class TerminalEngine implements HistoricalEngine {
-      set_position() { throw new Error('search should not run') }
-      analyze_depth(): never { throw new Error('search should not run') }
-      fallback_move() { return undefined }
+      set_position() {
+        throw new Error('search should not run')
+      }
+      analyze_depth(): never {
+        throw new Error('search should not run')
+      }
+      fallback_move() {
+        return undefined
+      }
       free() {}
     }
     const game = playGame({
@@ -78,21 +87,33 @@ describe('playGame', () => {
       gameIndex: 0,
       rules: { moveTimeMs: 50, maxPlies: 200 },
     })
-    expect(game).toMatchObject({ winner: 'white', candidateScore: 0, result: '1-0', reason: 'checkmate' })
+    expect(game).toMatchObject({
+      winner: 'white',
+      candidateScore: 0,
+      result: '1-0',
+      reason: 'checkmate',
+    })
   })
 
   it('deepens against the move-time budget and tolerates historical result shapes', () => {
     const budgets: number[] = []
     class TimedEngine implements HistoricalEngine {
       whiteToMove = true
-      set_position(fen: string) { this.whiteToMove = fen.split(' ')[1] === 'w' }
+      set_position(fen: string) {
+        this.whiteToMove = fen.split(' ')[1] === 'w'
+      }
       analyze_depth(_depth: number, _multiPv: number, timeLimitMs: number) {
         budgets.push(timeLimitMs)
         // Historical (pre soft-time-fraction) shape: only `timed_out` and `lines`.
-        return { timed_out: false, lines: [{ score_cp: 10, moves: [this.whiteToMove ? 'e2e4' : 'e7e5'] }] }
+        return {
+          timed_out: false,
+          lines: [{ score_cp: 10, moves: [this.whiteToMove ? 'e2e4' : 'e7e5'] }],
+        }
       }
 
-      fallback_move() { return undefined }
+      fallback_move() {
+        return undefined
+      }
       free() {}
     }
     const game = playGame({

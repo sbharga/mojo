@@ -1,0 +1,5 @@
+dist
+public/stockfish
+public/engine-versions
+coverage
+.claude

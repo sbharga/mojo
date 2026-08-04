@@ -479,7 +479,6 @@ pub(crate) fn evaluate_with_pawns(
 ) -> i32 {
     let mut score = accumulator.packed_score;
     let phase = i32::from(accumulator.phase);
-    let occupied = board.occupied();
     let king_zone = [
         get_king_moves(board.king(Color::White)) | board.king(Color::White).bitboard(),
         get_king_moves(board.king(Color::Black)) | board.king(Color::Black).bitboard(),
@@ -488,12 +487,80 @@ pub(crate) fn evaluate_with_pawns(
         pawn_attacks(board, Color::White),
         pawn_attacks(board, Color::Black),
     ];
+
+    let scan = scan_pieces(board, king_zone, pawn_attacks);
+    score += scan.mobility_score;
+    score += threat_and_king_danger_terms(board, Color::White, pawn_attacks, &scan)
+        + threat_and_king_danger_terms(board, Color::Black, pawn_attacks, &scan);
+
+    score += pawn_structure.score;
+
+    score += positional_terms(board, pawn_structure, Color::White)
+        + positional_terms(board, pawn_structure, Color::Black);
+
+    // Once one side has only a king, reward the winning side for taking away
+    // space and walking its king in. Without this, most K+R/K+Q moves have
+    // almost identical material scores until mate happens to enter the search
+    // horizon. Bishop-and-knight is special: its king must be driven to a
+    // corner controlled by the bishop, not merely to any edge.
+    score += pack(
+        0,
+        bare_king_mating_bonus(board, Color::White) - bare_king_mating_bonus(board, Color::Black),
+    );
+
+    let phase = phase.min(24);
+    let mg = mg_value(score);
+    let eg = eg_value(score);
+    let white_score = (mg * phase + eg * (24 - phase)) / 24;
+    let mut relative_score = if board.side_to_move() == Color::White {
+        white_score + tuned(TEMPO_BONUS, TEMPO)
+    } else {
+        -white_score + tuned(TEMPO_BONUS, TEMPO)
+    };
+    match crate::kpk::probe(board) {
+        Some(false) => return 0,
+        Some(true) => {
+            let pawn = board
+                .pieces(Piece::Pawn)
+                .into_iter()
+                .next()
+                .expect("KPK contains one pawn");
+            let pawn_to_move = board.color_on(pawn) == Some(board.side_to_move());
+            relative_score += if pawn_to_move {
+                KPK_WIN_SCORE
+            } else {
+                -KPK_WIN_SCORE
+            };
+        }
+        None => {}
+    }
+    relative_score * rule_scale(board) / 256
+}
+
+/// Attack-set bookkeeping produced by [`scan_pieces`], consumed by
+/// [`threat_and_king_danger_terms`].
+struct PieceScan {
+    all_attacks: [BitBoard; 2],
+    minor_attacks: [BitBoard; 2],
+    piece_attacks: [[BitBoard; 4]; 2],
+    king_attack_units: [i32; 2],
+    king_attackers: [i32; 2],
+    king_zone_attacks: [BitBoard; 2],
+    mobility_score: PackedScore,
+}
+
+/// Walks every knight/bishop/rook/queen/king once, accumulating the mobility
+/// score plus the attack-set bookkeeping the threat and king-safety terms
+/// need (king-zone hits, per-piece-type attack sets).
+fn scan_pieces(board: &Board, king_zone: [BitBoard; 2], pawn_attacks: [BitBoard; 2]) -> PieceScan {
+    let occupied = board.occupied();
     let mut all_attacks = pawn_attacks;
     let mut minor_attacks = [BitBoard::EMPTY; 2];
     let mut piece_attacks = [[BitBoard::EMPTY; 4]; 2];
     let mut king_attack_units = [0_i32; 2];
     let mut king_attackers = [0_i32; 2];
     let mut king_zone_attacks = [BitBoard::EMPTY; 2];
+    let mut mobility_score = 0;
 
     for piece in [
         Piece::Knight,
@@ -541,7 +608,7 @@ pub(crate) fn evaluate_with_pawns(
                 };
                 let mobility = safe_mobility(raw_attacks, own, pawn_attacks[!color as usize]);
                 let mobility_weight = tuned(mobility_weight, mobility_parameter);
-                score += sign * mobility * pack(mobility_weight, mobility_weight);
+                mobility_score += sign * mobility * pack(mobility_weight, mobility_weight);
 
                 let attack_units = match piece {
                     Piece::Knight | Piece::Bishop => 2,
@@ -559,185 +626,157 @@ pub(crate) fn evaluate_with_pawns(
         }
     }
 
-    for color in [Color::White, Color::Black] {
-        let sign = if color == Color::White { 1 } else { -1 };
-        let enemy = board.colors(!color);
-        let enemy_majors =
-            board.colored_pieces(!color, Piece::Rook) | board.colored_pieces(!color, Piece::Queen);
-        let [pawn_targets, minor_major_targets, hanging_targets] = threat_counts(
-            pawn_attacks[color as usize],
-            minor_attacks[color as usize],
-            all_attacks[color as usize],
-            all_attacks[!color as usize],
-            enemy,
-            enemy_majors,
-        );
-        let undefended_zone =
-            (king_zone_attacks[color as usize] & !all_attacks[!color as usize]).len() as i32;
-        let shield = king_shield_pawns(board, !color);
-        let units = king_danger_units(
-            king_attack_units[color as usize],
-            king_attackers[color as usize],
-            undefended_zone,
-            shield,
-            safe_check_units(
-                board,
-                color,
-                all_attacks[!color as usize],
-                piece_attacks[color as usize],
-            ),
-        );
-        score += sign
-            * pack(
-                tuned(KING_ATTACK_CURVE[units], KING_ATTACK_CURVE_START + units)
-                    + pawn_targets * tuned(PAWN_THREAT_BONUS_MG, PAWN_THREAT_MG)
-                    + minor_major_targets
-                        * tuned(MINOR_MAJOR_THREAT_BONUS_MG, MINOR_MAJOR_THREAT_MG)
-                    + hanging_targets * tuned(HANGING_THREAT_BONUS_MG, HANGING_THREAT_MG),
-                pawn_targets * tuned(PAWN_THREAT_BONUS_EG, PAWN_THREAT_EG)
-                    + minor_major_targets
-                        * tuned(MINOR_MAJOR_THREAT_BONUS_EG, MINOR_MAJOR_THREAT_EG)
-                    + hanging_targets * tuned(HANGING_THREAT_BONUS_EG, HANGING_THREAT_EG),
-            );
+    PieceScan {
+        all_attacks,
+        minor_attacks,
+        piece_attacks,
+        king_attack_units,
+        king_attackers,
+        king_zone_attacks,
+        mobility_score,
     }
+}
 
-    score += pawn_structure.score;
-
-    for color in [Color::White, Color::Black] {
-        let sign = if color == Color::White { 1 } else { -1 };
-        let pawns = board.colored_pieces(color, Piece::Pawn);
-        let enemy_pawns = board.colored_pieces(!color, Piece::Pawn);
-        let outposts = outpost_squares(pawns, enemy_pawns, color);
-        let knight_outposts = (board.colored_pieces(color, Piece::Knight) & outposts).len() as i32;
-        let bishop_outposts = (board.colored_pieces(color, Piece::Bishop) & outposts).len() as i32;
-        score += sign
-            * (knight_outposts
-                * pack(
-                    tuned(KNIGHT_OUTPOST_BONUS_MG, KNIGHT_OUTPOST_MG),
-                    tuned(KNIGHT_OUTPOST_BONUS_EG, KNIGHT_OUTPOST_EG),
-                )
-                + bishop_outposts
-                    * pack(
-                        tuned(BISHOP_OUTPOST_BONUS_MG, BISHOP_OUTPOST_MG),
-                        tuned(BISHOP_OUTPOST_BONUS_EG, BISHOP_OUTPOST_EG),
-                    ));
-        let king_files = adjacent_file_mask(board.king(!color).file() as usize);
-        for pawn in pawns & BitBoard(king_files) {
-            let relative_rank = if color == Color::White {
-                pawn.rank() as usize
-            } else {
-                7 - pawn.rank() as usize
-            };
-            if let Some(stage) = relative_rank.checked_sub(2) {
-                let stage = stage.min(STORM_LEN - 1);
-                score += sign * pack(tuned(PAWN_STORM_BONUS_MG[stage], STORM_MG_START + stage), 0);
-            }
-        }
-        for pawn in pawn_structure.passers[color as usize] {
-            let own_king_dist = chebyshev_distance(board.king(color), pawn);
-            let enemy_king_dist = chebyshev_distance(board.king(!color), pawn);
-            score += sign
-                * pack(
-                    0,
-                    enemy_king_dist * tuned(PASSER_ENEMY_KING_DIST_WEIGHT_EG, PASSER_ENEMY_KING)
-                        - own_king_dist * tuned(PASSER_OWN_KING_DIST_WEIGHT_EG, PASSER_OWN_KING),
-                );
-        }
-
-        if board.colored_pieces(color, Piece::Bishop).len() >= 2 {
-            score += sign
-                * pack(
-                    tuned(BISHOP_PAIR_BONUS_MG, BISHOP_PAIR_MG),
-                    tuned(BISHOP_PAIR_BONUS_EG, BISHOP_PAIR_EG),
-                );
-        }
-        let seventh = Rank::Seventh.relative_to(color);
-        let eighth = Rank::Eighth.relative_to(color);
-        for rook in board.colored_pieces(color, Piece::Rook) {
-            let file = rook.file() as usize;
-            let file_mask = BitBoard(FILE_A_BITS << file);
-            if (pawns & file_mask).is_empty() {
-                let enemy_on_file = !(enemy_pawns & file_mask).is_empty();
-                score += sign
-                    * if enemy_on_file {
-                        pack(
-                            tuned(ROOK_SEMI_OPEN_FILE_BONUS_MG, ROOK_SEMI_OPEN_MG),
-                            tuned(ROOK_SEMI_OPEN_FILE_BONUS_EG, ROOK_SEMI_OPEN_EG),
-                        )
-                    } else {
-                        pack(
-                            tuned(ROOK_OPEN_FILE_BONUS_MG, ROOK_OPEN_MG),
-                            tuned(ROOK_OPEN_FILE_BONUS_EG, ROOK_OPEN_EG),
-                        )
-                    };
-            }
-            if rook.rank() == seventh
-                && (board.king(!color).rank() == eighth
-                    || !(enemy_pawns & seventh.bitboard()).is_empty())
-            {
-                score += sign
-                    * pack(
-                        tuned(ROOK_ON_SEVENTH_BONUS_MG, ROOK_ON_SEVENTH_MG),
-                        tuned(ROOK_ON_SEVENTH_BONUS_EG, ROOK_ON_SEVENTH_EG),
-                    );
-            }
-            let behind_passer = pawn_structure.passers[color as usize]
-                .into_iter()
-                .any(|passer| {
-                    passer.file() == rook.file()
-                        && if color == Color::White {
-                            rook.rank() < passer.rank()
-                        } else {
-                            rook.rank() > passer.rank()
-                        }
-                });
-            if behind_passer {
-                score += sign
-                    * pack(
-                        tuned(ROOK_BEHIND_PASSER_BONUS_MG, ROOK_BEHIND_PASSER_MG),
-                        tuned(ROOK_BEHIND_PASSER_BONUS_EG, ROOK_BEHIND_PASSER_EG),
-                    );
-            }
-        }
-    }
-
-    // Once one side has only a king, reward the winning side for taking away
-    // space and walking its king in. Without this, most K+R/K+Q moves have
-    // almost identical material scores until mate happens to enter the search
-    // horizon. Bishop-and-knight is special: its king must be driven to a
-    // corner controlled by the bishop, not merely to any edge.
-    score += pack(
-        0,
-        bare_king_mating_bonus(board, Color::White) - bare_king_mating_bonus(board, Color::Black),
+/// Threat and king-danger score contribution for one color, built from the
+/// attack sets [`scan_pieces`] computed.
+fn threat_and_king_danger_terms(
+    board: &Board,
+    color: Color,
+    pawn_attacks: [BitBoard; 2],
+    scan: &PieceScan,
+) -> PackedScore {
+    let sign = if color == Color::White { 1 } else { -1 };
+    let enemy = board.colors(!color);
+    let enemy_majors =
+        board.colored_pieces(!color, Piece::Rook) | board.colored_pieces(!color, Piece::Queen);
+    let [pawn_targets, minor_major_targets, hanging_targets] = threat_counts(
+        pawn_attacks[color as usize],
+        scan.minor_attacks[color as usize],
+        scan.all_attacks[color as usize],
+        scan.all_attacks[!color as usize],
+        enemy,
+        enemy_majors,
     );
+    let undefended_zone =
+        (scan.king_zone_attacks[color as usize] & !scan.all_attacks[!color as usize]).len() as i32;
+    let shield = king_shield_pawns(board, !color);
+    let units = king_danger_units(
+        scan.king_attack_units[color as usize],
+        scan.king_attackers[color as usize],
+        undefended_zone,
+        shield,
+        safe_check_units(
+            board,
+            color,
+            scan.all_attacks[!color as usize],
+            scan.piece_attacks[color as usize],
+        ),
+    );
+    sign * pack(
+        tuned(KING_ATTACK_CURVE[units], KING_ATTACK_CURVE_START + units)
+            + pawn_targets * tuned(PAWN_THREAT_BONUS_MG, PAWN_THREAT_MG)
+            + minor_major_targets * tuned(MINOR_MAJOR_THREAT_BONUS_MG, MINOR_MAJOR_THREAT_MG)
+            + hanging_targets * tuned(HANGING_THREAT_BONUS_MG, HANGING_THREAT_MG),
+        pawn_targets * tuned(PAWN_THREAT_BONUS_EG, PAWN_THREAT_EG)
+            + minor_major_targets * tuned(MINOR_MAJOR_THREAT_BONUS_EG, MINOR_MAJOR_THREAT_EG)
+            + hanging_targets * tuned(HANGING_THREAT_BONUS_EG, HANGING_THREAT_EG),
+    )
+}
 
-    let phase = phase.min(24);
-    let mg = mg_value(score);
-    let eg = eg_value(score);
-    let white_score = (mg * phase + eg * (24 - phase)) / 24;
-    let mut relative_score = if board.side_to_move() == Color::White {
-        white_score + tuned(TEMPO_BONUS, TEMPO)
-    } else {
-        -white_score + tuned(TEMPO_BONUS, TEMPO)
-    };
-    match crate::kpk::probe(board) {
-        Some(false) => return 0,
-        Some(true) => {
-            let pawn = board
-                .pieces(Piece::Pawn)
-                .into_iter()
-                .next()
-                .expect("KPK contains one pawn");
-            let pawn_to_move = board.color_on(pawn) == Some(board.side_to_move());
-            relative_score += if pawn_to_move {
-                KPK_WIN_SCORE
+/// Outpost, pawn-storm, passed-pawn king-distance, bishop-pair, and rook
+/// file/seventh-rank/behind-passer bonuses for one color.
+fn positional_terms(board: &Board, pawn_structure: PawnStructure, color: Color) -> PackedScore {
+    let sign = if color == Color::White { 1 } else { -1 };
+    let mut score = 0;
+    let pawns = board.colored_pieces(color, Piece::Pawn);
+    let enemy_pawns = board.colored_pieces(!color, Piece::Pawn);
+    let outposts = outpost_squares(pawns, enemy_pawns, color);
+    let knight_outposts = (board.colored_pieces(color, Piece::Knight) & outposts).len() as i32;
+    let bishop_outposts = (board.colored_pieces(color, Piece::Bishop) & outposts).len() as i32;
+    score += knight_outposts
+        * pack(
+            tuned(KNIGHT_OUTPOST_BONUS_MG, KNIGHT_OUTPOST_MG),
+            tuned(KNIGHT_OUTPOST_BONUS_EG, KNIGHT_OUTPOST_EG),
+        )
+        + bishop_outposts
+            * pack(
+                tuned(BISHOP_OUTPOST_BONUS_MG, BISHOP_OUTPOST_MG),
+                tuned(BISHOP_OUTPOST_BONUS_EG, BISHOP_OUTPOST_EG),
+            );
+    let king_files = adjacent_file_mask(board.king(!color).file() as usize);
+    for pawn in pawns & BitBoard(king_files) {
+        let relative_rank = if color == Color::White {
+            pawn.rank() as usize
+        } else {
+            7 - pawn.rank() as usize
+        };
+        if let Some(stage) = relative_rank.checked_sub(2) {
+            let stage = stage.min(STORM_LEN - 1);
+            score += pack(tuned(PAWN_STORM_BONUS_MG[stage], STORM_MG_START + stage), 0);
+        }
+    }
+    for pawn in pawn_structure.passers[color as usize] {
+        let own_king_dist = chebyshev_distance(board.king(color), pawn);
+        let enemy_king_dist = chebyshev_distance(board.king(!color), pawn);
+        score += pack(
+            0,
+            enemy_king_dist * tuned(PASSER_ENEMY_KING_DIST_WEIGHT_EG, PASSER_ENEMY_KING)
+                - own_king_dist * tuned(PASSER_OWN_KING_DIST_WEIGHT_EG, PASSER_OWN_KING),
+        );
+    }
+
+    if board.colored_pieces(color, Piece::Bishop).len() >= 2 {
+        score += pack(
+            tuned(BISHOP_PAIR_BONUS_MG, BISHOP_PAIR_MG),
+            tuned(BISHOP_PAIR_BONUS_EG, BISHOP_PAIR_EG),
+        );
+    }
+    let seventh = Rank::Seventh.relative_to(color);
+    let eighth = Rank::Eighth.relative_to(color);
+    for rook in board.colored_pieces(color, Piece::Rook) {
+        let file = rook.file() as usize;
+        let file_mask = BitBoard(FILE_A_BITS << file);
+        if (pawns & file_mask).is_empty() {
+            let enemy_on_file = !(enemy_pawns & file_mask).is_empty();
+            score += if enemy_on_file {
+                pack(
+                    tuned(ROOK_SEMI_OPEN_FILE_BONUS_MG, ROOK_SEMI_OPEN_MG),
+                    tuned(ROOK_SEMI_OPEN_FILE_BONUS_EG, ROOK_SEMI_OPEN_EG),
+                )
             } else {
-                -KPK_WIN_SCORE
+                pack(
+                    tuned(ROOK_OPEN_FILE_BONUS_MG, ROOK_OPEN_MG),
+                    tuned(ROOK_OPEN_FILE_BONUS_EG, ROOK_OPEN_EG),
+                )
             };
         }
-        None => {}
+        if rook.rank() == seventh
+            && (board.king(!color).rank() == eighth
+                || !(enemy_pawns & seventh.bitboard()).is_empty())
+        {
+            score += pack(
+                tuned(ROOK_ON_SEVENTH_BONUS_MG, ROOK_ON_SEVENTH_MG),
+                tuned(ROOK_ON_SEVENTH_BONUS_EG, ROOK_ON_SEVENTH_EG),
+            );
+        }
+        let behind_passer = pawn_structure.passers[color as usize]
+            .into_iter()
+            .any(|passer| {
+                passer.file() == rook.file()
+                    && if color == Color::White {
+                        rook.rank() < passer.rank()
+                    } else {
+                        rook.rank() > passer.rank()
+                    }
+            });
+        if behind_passer {
+            score += pack(
+                tuned(ROOK_BEHIND_PASSER_BONUS_MG, ROOK_BEHIND_PASSER_MG),
+                tuned(ROOK_BEHIND_PASSER_BONUS_EG, ROOK_BEHIND_PASSER_EG),
+            );
+        }
     }
-    relative_score * rule_scale(board) / 256
+    sign * score
 }
 
 fn halfmove_scale(board: &Board) -> i32 {

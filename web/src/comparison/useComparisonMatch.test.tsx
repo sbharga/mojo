@@ -3,7 +3,13 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useComparisonMatch } from './useComparisonMatch'
-import type { ComparisonWorkerMessage, EngineVersion, GameResult, MatchConfiguration, Opening } from './types'
+import type {
+  ComparisonWorkerMessage,
+  EngineVersion,
+  GameResult,
+  MatchConfiguration,
+  Opening,
+} from './types'
 
 class WorkerStub {
   static instances: WorkerStub[] = []
@@ -16,9 +22,15 @@ class WorkerStub {
     WorkerStub.instances.push(this)
   }
 
-  postMessage(message: unknown) { this.posted.push(message) }
-  terminate() { this.terminated = true }
-  emit(message: ComparisonWorkerMessage) { this.onmessage?.({ data: message } as MessageEvent<ComparisonWorkerMessage>) }
+  postMessage(message: unknown) {
+    this.posted.push(message)
+  }
+  terminate() {
+    this.terminated = true
+  }
+  emit(message: ComparisonWorkerMessage) {
+    this.onmessage?.({ data: message } as MessageEvent<ComparisonWorkerMessage>)
+  }
 }
 
 const version = (sha: string): EngineVersion => ({

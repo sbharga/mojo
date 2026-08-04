@@ -29,8 +29,10 @@
     "build": "npm run build:engine && tsc -b && vite build",
     "build:book": "npm run build:engine:book && tsc -b && vite build",
     "lint": "oxlint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "vitest run",
-    "check": "npm run lint && tsc -b && npm run test && npm run test:openings && npm run test:strength && npm run test:cancellation && npm run test:seeding && npm run test:size && npm run test:selfplay"
+    "check": "npm run lint && npm run format:check && tsc -b && npm run test && npm run test:openings && npm run test:strength && npm run test:cancellation && npm run test:seeding && npm run test:size && npm run test:selfplay"
   },
   "dependencies": {
     "chess.js": "^1.4.0",
@@ -48,6 +50,7 @@
     "@vitejs/plugin-react": "^6.0.3",
     "jsdom": "^29.1.1",
     "oxlint": "^1.74.0",
+    "prettier": "^3.9.6",
     "typescript": "~7.0.2",
     "vite": "^8.1.5",
     "vitest": "^4.1.10"

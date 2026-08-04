@@ -17,10 +17,10 @@ export default function Root() {
     const update = () => {
       const nextPage = currentPage()
       if (
-        page === 'compare'
-        && nextPage !== 'compare'
-        && comparisonRunning.current
-        && !window.confirm('Leave this page and cancel the running match?')
+        page === 'compare' &&
+        nextPage !== 'compare' &&
+        comparisonRunning.current &&
+        !window.confirm('Leave this page and cancel the running match?')
       ) {
         window.history.replaceState(null, '', '#/compare')
         return

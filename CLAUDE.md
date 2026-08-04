@@ -1,9 +1,3 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## What this is
-
 Mojo is a Rust chess engine compiled to WebAssembly, plus a React web UI to play against it. Two top-level packages:
 
 - `engine/` — Rust crate `mojo-engine`. Iterative-deepening alpha-beta search + handcrafted tapered evaluation, exposed to JS via `wasm-bindgen`. Also hosts offline tooling: Texel eval tuning, SPSA search tuning, opening-book generation, self-play/accuracy harnesses (all `.mjs` scripts + feature-gated Rust binaries).

@@ -1,7 +1,11 @@
 /// <reference lib="webworker" />
 
 import { playGame, type HistoricalEngineConstructor } from './match'
-import type { ComparisonWorkerMessage, ComparisonWorkerRequest, WorkerInitializeRequest } from './types'
+import type {
+  ComparisonWorkerMessage,
+  ComparisonWorkerRequest,
+  WorkerInitializeRequest,
+} from './types'
 
 interface HistoricalModule {
   default: () => Promise<unknown>
@@ -31,11 +35,13 @@ async function initialize(request: WorkerInitializeRequest) {
 self.onmessage = (event: MessageEvent<ComparisonWorkerRequest>) => {
   const request = event.data
   if (request.type === 'initialize') {
-    void initialize(request).catch((error) => send({
-      type: 'error',
-      runId: request.runId,
-      message: error instanceof Error ? error.message : String(error),
-    }))
+    void initialize(request).catch((error) =>
+      send({
+        type: 'error',
+        runId: request.runId,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    )
     return
   }
   if (!configuration || !Baseline || !Candidate || request.runId !== configuration.runId) return

@@ -1,62 +1,53 @@
 /// <reference lib="webworker" />
 
-import init, { Engine } from "../../../engine/pkg/mojo_engine.js";
-import wasmUrl from "../../../engine/pkg/mojo_engine_bg.wasm?url";
-import simdWasmUrl from "../../../engine/pkg/mojo_engine_simd_bg.wasm?url";
-import type {
-  Analysis,
-  AnalyzeRequest,
-  WorkerMessage,
-  WorkerRequest,
-} from "./types";
-import { toWhiteRelative } from "./analysis";
-import { isCancelled } from "./stopSignal";
-import { supportsWasmSimd } from "./wasmFeatures";
-import { repetitionFingerprint } from "./repetitionFingerprint";
-import {
-  iterationBudget,
-  MAX_SEARCH_DEPTH,
-  shouldStopBeforeNextIteration,
-} from "./searchControl";
+import init, { Engine } from '../../../engine/pkg/mojo_engine.js'
+import wasmUrl from '../../../engine/pkg/mojo_engine_bg.wasm?url'
+import simdWasmUrl from '../../../engine/pkg/mojo_engine_simd_bg.wasm?url'
+import type { Analysis, AnalyzeRequest, WorkerMessage, WorkerRequest } from './types'
+import { toWhiteRelative } from './analysis'
+import { isCancelled } from './stopSignal'
+import { supportsWasmSimd } from './wasmFeatures'
+import { repetitionFingerprint } from './repetitionFingerprint'
+import { iterationBudget, MAX_SEARCH_DEPTH, shouldStopBeforeNextIteration } from './searchControl'
 
-let initialized = false;
-let cancelledBefore = 0;
-let engine: Engine | null = null;
-let initialization: Promise<void> | null = null;
-let stopFlag: Int32Array | null = null;
+let initialized = false
+let cancelledBefore = 0
+let engine: Engine | null = null
+let initialization: Promise<void> | null = null
+let stopFlag: Int32Array | null = null
 
 async function ensureEngine() {
-  if (initialized) return;
+  if (initialized) return
   initialization ??= (async () => {
-    await init({ module_or_path: supportsWasmSimd() ? simdWasmUrl : wasmUrl });
-    engine = new Engine();
-    if (stopFlag) engine.set_stop_flag(stopFlag);
-    initialized = true;
-    postMessage({ type: "ready" } satisfies WorkerMessage);
-  })();
+    await init({ module_or_path: supportsWasmSimd() ? simdWasmUrl : wasmUrl })
+    engine = new Engine()
+    if (stopFlag) engine.set_stop_flag(stopFlag)
+    initialized = true
+    postMessage({ type: 'ready' } satisfies WorkerMessage)
+  })()
   try {
-    await initialization;
+    await initialization
   } catch (error) {
     // Permit a later request to retry a transient initialization failure.
-    initialization = null;
-    throw error;
+    initialization = null
+    throw error
   }
 }
 
 async function analyze(request: AnalyzeRequest) {
   try {
-    await ensureEngine();
-    if (!engine) throw new Error("Engine failed to initialize");
-    engine.set_stop_request(request.requestId);
-    engine.set_position(request.fen, request.historyFens);
-    const started = performance.now();
-    const historyFingerprint = repetitionFingerprint(request.fen, request.historyFens);
+    await ensureEngine()
+    if (!engine) throw new Error('Engine failed to initialize')
+    engine.set_stop_request(request.requestId)
+    engine.set_position(request.fen, request.historyFens)
+    const started = performance.now()
+    const historyFingerprint = repetitionFingerprint(request.fen, request.historyFens)
     const bookEngine = engine as Engine & {
-      book_move?: (seed: number) => string | undefined;
-    };
-    if (request.purpose === "move" && bookEngine.book_move) {
-      const seed = crypto.getRandomValues(new Uint32Array(1))[0];
-      const move = bookEngine.book_move(seed);
+      book_move?: (seed: number) => string | undefined
+    }
+    if (request.purpose === 'move' && bookEngine.book_move) {
+      const seed = crypto.getRandomValues(new Uint32Array(1))[0]
+      const move = bookEngine.book_move(seed)
       if (move) {
         const analysis: Analysis = {
           root_fen: request.fen,
@@ -72,14 +63,14 @@ async function analyze(request: AnalyzeRequest) {
           timed_out: false,
           partial: false,
           lines: [{ score_cp: 0, moves: [move] }],
-        };
+        }
         postMessage({
-          type: "complete",
+          type: 'complete',
           requestId: request.requestId,
           purpose: request.purpose,
           analysis,
-        } satisfies WorkerMessage);
-        return;
+        } satisfies WorkerMessage)
+        return
       }
     }
     if (request.seed) {
@@ -88,62 +79,63 @@ async function analyze(request: AnalyzeRequest) {
         request.seed.depth,
         request.seed.score_cp,
         request.seed.mate_in,
-      );
+      )
     }
-    let depth = 1;
-    let latest: Analysis | null = null;
-    const multiPv = request.purpose === "move" ? 1 : 3;
+    let depth = 1
+    let latest: Analysis | null = null
+    const multiPv = request.purpose === 'move' ? 1 : 3
     while (
-      request.requestId > cancelledBefore
-      && !isCancelled(stopFlag, request.requestId)
-      && depth <= MAX_SEARCH_DEPTH
+      request.requestId > cancelledBefore &&
+      !isCancelled(stopFlag, request.requestId) &&
+      depth <= MAX_SEARCH_DEPTH
     ) {
-      const remaining = request.thinkTimeMs - (performance.now() - started);
-      if (remaining <= 0 && latest) break;
+      const remaining = request.thinkTimeMs - (performance.now() - started)
+      if (remaining <= 0 && latest) break
       // A full remaining budget lets the selected engine-time preset reach
       // meaningfully deeper searches; the Rust search checks its deadline.
-      const budget = iterationBudget(remaining);
+      const budget = iterationBudget(remaining)
       const result = toWhiteRelative(
         engine.analyze_depth(depth, multiPv, budget) as Omit<
           Analysis,
-          "root_fen" | "repetition_fingerprint"
+          'root_fen' | 'repetition_fingerprint'
         >,
         request.fen,
-      );
+      )
       const rootedResult: Analysis = {
         ...result,
         root_fen: request.fen,
         repetition_fingerprint: historyFingerprint,
-      };
-      if (
-        request.requestId <= cancelledBefore
-        || isCancelled(stopFlag, request.requestId)
-      ) return;
+      }
+      if (request.requestId <= cancelledBefore || isCancelled(stopFlag, request.requestId)) return
       // A timed-out iteration is only usable when the engine itself marked it
       // `partial`: every root move that contributed to its line finished a
       // full search, it's just that a later root move (or a deeper depth)
       // never got the chance to run. It must never replace a result from an
       // equal or greater depth (the loop's `depth` only increases, but this
       // guards the invariant explicitly rather than relying on that shape).
-      const usable = result.lines.length > 0 && (!result.timed_out || result.partial);
+      const usable = result.lines.length > 0 && (!result.timed_out || result.partial)
       if (usable && (!latest || result.depth > latest.depth)) {
-        latest = rootedResult;
+        latest = rootedResult
         postMessage({
-          type: "analysis",
+          type: 'analysis',
           requestId: request.requestId,
           analysis: rootedResult,
-        } satisfies WorkerMessage);
+        } satisfies WorkerMessage)
       }
-      if (result.timed_out) break;
-      if (latest && shouldStopBeforeNextIteration({
-        elapsedMs: performance.now() - started,
-        thinkTimeMs: request.thinkTimeMs,
-        softTimeFraction: result.soft_time_fraction,
-        predictedNextMs: result.predicted_next_ms,
-        ebfGateOverride: result.ebf_gate_override,
-        multiPv,
-      })) break;
-      depth += 1;
+      if (result.timed_out) break
+      if (
+        latest &&
+        shouldStopBeforeNextIteration({
+          elapsedMs: performance.now() - started,
+          thinkTimeMs: request.thinkTimeMs,
+          softTimeFraction: result.soft_time_fraction,
+          predictedNextMs: result.predicted_next_ms,
+          ebfGateOverride: result.ebf_gate_override,
+          multiPv,
+        })
+      )
+        break
+      depth += 1
       // Each analyze_depth call is a single synchronous, uninterruptible Wasm
       // call, so this loop must yield back to the event loop between depths.
       // Without it, a queued "cancel" for this request (e.g. because the
@@ -152,10 +144,10 @@ async function analyze(request: AnalyzeRequest) {
       // budget in front of the next request's. A microtask isn't enough:
       // queued worker "message" events are macrotasks, so the yield must be
       // a real macrotask (setTimeout) to let them run first.
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
     }
-    if (request.purpose === "move" && latest === null) {
-      const move = engine.fallback_move();
+    if (request.purpose === 'move' && latest === null) {
+      const move = engine.fallback_move()
       if (move) {
         latest = {
           root_fen: request.fen,
@@ -171,45 +163,42 @@ async function analyze(request: AnalyzeRequest) {
           timed_out: true,
           partial: false,
           lines: [{ score_cp: 0, moves: [move] }],
-        };
+        }
       }
     }
-    if (
-      request.requestId > cancelledBefore
-      && !isCancelled(stopFlag, request.requestId)
-    ) {
+    if (request.requestId > cancelledBefore && !isCancelled(stopFlag, request.requestId)) {
       postMessage({
-        type: "complete",
+        type: 'complete',
         requestId: request.requestId,
         purpose: request.purpose,
         analysis: latest,
-      } satisfies WorkerMessage);
+      } satisfies WorkerMessage)
     }
   } catch (error) {
     postMessage({
-      type: "error",
+      type: 'error',
       requestId: request.requestId,
       message: error instanceof Error ? error.message : String(error),
-    } satisfies WorkerMessage);
+    } satisfies WorkerMessage)
   }
 }
 
 self.onmessage = (event: MessageEvent<WorkerRequest>) => {
-  const request = event.data;
-  if (request.type === "initialize") {
-    if (request.stopBuffer) stopFlag = new Int32Array(request.stopBuffer);
+  const request = event.data
+  if (request.type === 'initialize') {
+    if (request.stopBuffer) stopFlag = new Int32Array(request.stopBuffer)
     void ensureEngine().catch((error) => {
       postMessage({
-        type: "error",
+        type: 'error',
         requestId: 0,
         message: error instanceof Error ? error.message : String(error),
-      } satisfies WorkerMessage);
-    });
-    return;
+      } satisfies WorkerMessage)
+    })
+    return
   }
-  if (request.type === "cancel") {
-    cancelledBefore = Math.max(cancelledBefore, request.requestId);
-    return;
+  if (request.type === 'cancel') {
+    cancelledBefore = Math.max(cancelledBefore, request.requestId)
+    return
   }
-  void analyze(request);
-};
+  void analyze(request)
+}
