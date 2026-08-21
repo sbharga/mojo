@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.28 (TeX Live 2025/Debian) (preloaded format=pdflatex 2026.8.4)  4 AUG 2026 15:28
+This is pdfTeX, Version 3.141592653-2.6-1.40.28 (TeX Live 2025/Debian) (preloaded format=pdflatex 2026.8.19)  21 AUG 2026 16:57
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -858,50 +858,6 @@ Package cleveref Info: always capitalise cross-reference names on input line 78
 52.
 )
 ==> First Aid for cleveref.sty applied!
-(/usr/share/texlive/texmf-dist/tex/latex/pbalance/pbalance.sty
-Package: pbalance 2022/07/28 v1.4.0 Poor man's balance
-
-(/usr/share/texlive/texmf-dist/tex/latex/l3kernel/expl3.sty
-Package: expl3 2026-01-19 L3 programming layer (loader) 
-
-(/usr/share/texlive/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def
-File: l3backend-pdftex.def 2025-10-09 L3 backend support: PDF output (pdfTeX)
-\l__color_backend_stack_int=\count348
-))
-(/usr/share/texlive/texmf-dist/tex/latex/base/atbegshi-ltx.sty
-Package: atbegshi-ltx 2021/01/10 v1.0c Emulation of the original atbegshi
-package with kernel methods
-)
-(/usr/share/texlive/texmf-dist/tex/latex/base/atveryend-ltx.sty
-Package: atveryend-ltx 2020/08/19 v1.0a Emulation of the original atveryend pac
-kage
-with kernel methods
-)
-(/usr/share/texlive/texmf-dist/tex/latex/zref/zref-abspage.sty
-Package: zref-abspage 2025-06-08 v2.36 Module abspage for zref (HO)
-
-(/usr/share/texlive/texmf-dist/tex/latex/zref/zref-base.sty
-Package: zref-base 2025-06-08 v2.36 Module base for zref (HO)
-
-(/usr/share/texlive/texmf-dist/tex/generic/etexcmds/etexcmds.sty
-Package: etexcmds 2019/12/15 v1.7 Avoid name clashes with e-TeX commands (HO)
-)
-(/usr/share/texlive/texmf-dist/tex/latex/auxhook/auxhook.sty
-Package: auxhook 2019-12-17 v1.6 Hooks for auxiliary files (HO)
-)
-Package zref Info: New property list: main on input line 767.
-Package zref Info: New property: default on input line 768.
-Package zref Info: New property: page on input line 769.
-)
-\c@abspage=\count349
-Package zref Info: New property: abspage on input line 67.
-)
-(/usr/share/texlive/texmf-dist/tex/latex/filehook/filehook.sty
-Package: filehook 2022/10/25 v0.8b Hooks for input files
-
-(/usr/share/texlive/texmf-dist/tex/latex/filehook/filehook-2020.sty
-Package: filehook-2020 2022/10/25 v0.8b Hooks for input files
-)))
 (/usr/share/texlive/texmf-dist/tex/latex/preprint/balance.sty
 Package: balance 1999/02/23 4.3 (PWD)
 \oldvsize=\dimen318
@@ -912,7 +868,12 @@ LaTeX Font Info:    Trying to load font information for T1+lmr on input line 52
 
 (/usr/share/texmf/tex/latex/lm/t1lmr.fd
 File: t1lmr.fd 2015/05/01 v1.6.1 Font defs for Latin Modern
-) (./mojo-engine.aux)
+)
+(/usr/share/texlive/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def
+File: l3backend-pdftex.def 2025-10-09 L3 backend support: PDF output (pdfTeX)
+\l__color_backend_stack_int=\count348
+)
+(./mojo-engine.aux)
 \openout1 = `mojo-engine.aux'.
 
 LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 52.
@@ -991,16 +952,16 @@ File: mt-cmr.cfg 2013/05/19 v2.2 microtype config. file: Computer Modern Roman
 )
 (/usr/share/texlive/texmf-dist/tex/context/base/mkii/supp-pdf.mkii
 [Loading MPS to PDF converter (version 2006.09.02).]
-\scratchcounter=\count350
+\scratchcounter=\count349
 \scratchdimen=\dimen319
 \scratchbox=\box71
-\nofMPsegments=\count351
-\nofMParguments=\count352
+\nofMPsegments=\count350
+\nofMParguments=\count351
 \everyMPshowfont=\toks47
-\MPscratchCnt=\count353
+\MPscratchCnt=\count352
 \MPscratchDim=\dimen320
-\MPnumerator=\count354
-\makeMPintoPDFobject=\count355
+\MPnumerator=\count353
+\makeMPintoPDFobject=\count354
 \everyMPtoPDFconversion=\toks48
 ) (/usr/share/texlive/texmf-dist/tex/latex/epstopdf-pkg/epstopdf-base.sty
 Package: epstopdf-base 2020-01-24 v2.11 Base part for package epstopdf
@@ -1113,7 +1074,37 @@ PGFPlots: reading {data/timed-depth.csv}
 PGFPlots: reading {data/timed-depth.csv}
 PGFPlots: reading {data/timed-depth.csv}
 PGFPlots: reading {data/timed-depth.csv}
- [6] (./mojo-engine.bbl
+ [6]
+Underfull \hbox (badness 10000) in paragraph at lines 701--701
+[]|\T1/lmr/m/n/9 (+20) Safe Rust (\T1/lmtt/m/n/9 #![forbid(unsafe_code)]\T1/lmr
+/m/n/9 (+20) ),
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 701--701
+[]|\T1/lmr/m/n/9 (+20) Single-threaded per worker; iso-lated
+ []
+
+
+Underfull \hbox (badness 3713) in paragraph at lines 730--730
+[]\T1/lmr/bx/n/12 (+20) Evaluation paradigm: HCE vs.
+ []
+
+LaTeX Font Info:    Trying to load font information for TS1+lmr on input line 7
+56.
+(/usr/share/texmf/tex/latex/lm/ts1lmr.fd
+File: ts1lmr.fd 2015/05/01 v1.6.1 Font defs for Latin Modern
+) [7{/usr/share/texmf/fonts/enc/dvips/lm/lm-ts1.enc}]
+Underfull \hbox (badness 7012) in paragraph at lines 781--787
+[]\T1/lmr/m/n/10 (+20) In con-trast, \T1/lmr/m/sc/10 (+20) Mojo \T1/lmr/m/n/10 
+(+20) is writ-ten in safe Rust
+ []
+
+
+Underfull \vbox (badness 2343) has occurred while \output is active []
+
+ [8]
+(./mojo-engine.bbl
 Underfull \hbox (badness 2035) in paragraph at lines 39--44
 \T1/lmr/m/n/10 (+20) the eval-u-a-tion of game po-si-tions.  \T1/lmr/m/it/10 (+
 20) Jour-nal of
@@ -1125,25 +1116,30 @@ Underfull \hbox (badness 1112) in paragraph at lines 39--44
 0) , 3:373--382, 1995a.
  []
 
-[7]
-Underfull \hbox (badness 2865) in paragraph at lines 84--89
+[9]
+Underfull \hbox (badness 2865) in paragraph at lines 92--97
 []\T1/lmr/m/n/10 (+20) T. An-thony Mars-land, Alexan-der Reine-feld, and
  []
 
-) [8] (./mojo-engine.aux)
+
+Underfull \hbox (badness 1454) in paragraph at lines 127--131
+[]\T1/lmr/m/n/10 (+20) Stockfish De-vel-op-ers.  Stock-fish: A strong open-
+ []
+
+) [10] (./mojo-engine.aux)
  ***********
 LaTeX2e <2025-11-01>
 L3 programming layer <2026-01-19>
  ***********
 Package rerunfilecheck Info: File `mojo-engine.out' has not changed.
-(rerunfilecheck)             Checksum: EA613ECCE7CB32B2B99BFAC6C9ABDBD3;2851.
+(rerunfilecheck)             Checksum: D4B71EFE041B30BBC5346A7A205AC24B;4277.
  ) 
 Here is how much of TeX's memory you used:
- 38610 strings out of 469514
- 890015 string characters out of 5470073
- 1450111 words of memory out of 5000000
- 66379 multiletter control sequences out of 15000+600000
- 706520 words of font info for 194 fonts, out of 8000000 for 9000
+ 38143 strings out of 469514
+ 879167 string characters out of 5470072
+ 1436682 words of memory out of 5000000
+ 65890 multiletter control sequences out of 15000+600000
+ 711142 words of font info for 212 fonts, out of 8000000 for 9000
  14 hyphenation exceptions out of 8191
  102i,19n,107p,1001b,2332s stack positions out of 10000i,1000n,20000p,200000b,200000s
 </usr/share/texmf/fonts/type1/public/lm/lmbx10.pfb></usr/share/texmf/fonts/ty
@@ -1152,16 +1148,17 @@ usr/share/texmf/fonts/type1/public/lm/lmex10.pfb></usr/share/texmf/fonts/type1/
 public/lm/lmmi10.pfb></usr/share/texmf/fonts/type1/public/lm/lmmi7.pfb></usr/sh
 are/texmf/fonts/type1/public/lm/lmmi9.pfb></usr/share/texmf/fonts/type1/public/
 lm/lmr10.pfb></usr/share/texmf/fonts/type1/public/lm/lmr12.pfb></usr/share/texm
-f/fonts/type1/public/lm/lmr5.pfb></usr/share/texmf/fonts/type1/public/lm/lmr7.p
-fb></usr/share/texmf/fonts/type1/public/lm/lmr9.pfb></usr/share/texmf/fonts/typ
-e1/public/lm/lmri10.pfb></usr/share/texmf/fonts/type1/public/lm/lmsy10.pfb></us
-r/share/texmf/fonts/type1/public/lm/lmsy7.pfb></usr/share/texmf/fonts/type1/pub
-lic/lm/lmsy9.pfb></usr/share/texmf/fonts/type1/public/lm/lmtt10.pfb></usr/share
-/texmf/fonts/type1/public/lm/lmtt9.pfb>
-Output written on mojo-engine.pdf (8 pages, 385016 bytes).
+f/fonts/type1/public/lm/lmr5.pfb></usr/share/texmf/fonts/type1/public/lm/lmr6.p
+fb></usr/share/texmf/fonts/type1/public/lm/lmr7.pfb></usr/share/texmf/fonts/typ
+e1/public/lm/lmr9.pfb></usr/share/texmf/fonts/type1/public/lm/lmri10.pfb></usr/
+share/texmf/fonts/type1/public/lm/lmsy10.pfb></usr/share/texmf/fonts/type1/publ
+ic/lm/lmsy7.pfb></usr/share/texmf/fonts/type1/public/lm/lmsy9.pfb></usr/share/t
+exmf/fonts/type1/public/lm/lmtt10.pfb></usr/share/texmf/fonts/type1/public/lm/l
+mtt9.pfb>
+Output written on mojo-engine.pdf (10 pages, 428336 bytes).
 PDF statistics:
- 335 PDF objects out of 1000 (max. 8388607)
- 283 compressed objects within 3 object streams
- 54 named destinations out of 1000 (max. 500000)
- 42133 words of extra memory for PDF output out of 42996 (max. 10000000)
+ 404 PDF objects out of 1000 (max. 8388607)
+ 346 compressed objects within 4 object streams
+ 72 named destinations out of 1000 (max. 500000)
+ 46277 words of extra memory for PDF output out of 51595 (max. 10000000)
 
