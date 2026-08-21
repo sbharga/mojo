@@ -1,0 +1,86 @@
+{
+  "benchmark": [
+    {
+      "Position": "Start",
+      "Mojo D9 NPS": 893784,
+      "SF18 D9 NPS": 359384,
+      "NPS Ratio": "2.49x",
+      "Mojo 500ms Depth": 13,
+      "SF18 500ms Depth": 19,
+      "Mojo 500ms Nodes": 483681,
+      "SF18 500ms Nodes": 423430
+    },
+    {
+      "Position": "Tactical",
+      "Mojo D9 NPS": 1123105,
+      "SF18 D9 NPS": 921272,
+      "NPS Ratio": "1.22x",
+      "Mojo 500ms Depth": 12,
+      "SF18 500ms Depth": 18,
+      "Mojo 500ms Nodes": 363569,
+      "SF18 500ms Nodes": 445121
+    },
+    {
+      "Position": "Middlegame",
+      "Mojo D9 NPS": 1416233,
+      "SF18 D9 NPS": 708000,
+      "NPS Ratio": "2.00x",
+      "Mojo 500ms Depth": 12,
+      "SF18 500ms Depth": 20,
+      "Mojo 500ms Nodes": 631155,
+      "SF18 500ms Nodes": 465363
+    },
+    {
+      "Position": "Endgame",
+      "Mojo D9 NPS": 2084637,
+      "SF18 D9 NPS": 930333,
+      "NPS Ratio": "2.24x",
+      "Mojo 500ms Depth": 18,
+      "SF18 500ms Depth": 14,
+      "Mojo 500ms Nodes": 840963,
+      "SF18 500ms Nodes": 572086
+    }
+  ],
+  "matches": [
+    {
+      "Stockfish Elo": 1600,
+      "Games": 20,
+      "Mojo (W-D-L)": "19-1-0",
+      "Score %": "97.5%",
+      "Delta Elo": "+636",
+      "Mojo Performance Elo": 2236
+    },
+    {
+      "Stockfish Elo": 1800,
+      "Games": 20,
+      "Mojo (W-D-L)": "20-0-0",
+      "Score %": "100.0%",
+      "Delta Elo": "+798",
+      "Mojo Performance Elo": 2598
+    },
+    {
+      "Stockfish Elo": 2000,
+      "Games": 20,
+      "Mojo (W-D-L)": "18-1-1",
+      "Score %": "92.5%",
+      "Delta Elo": "+436",
+      "Mojo Performance Elo": 2436
+    },
+    {
+      "Stockfish Elo": 2200,
+      "Games": 20,
+      "Mojo (W-D-L)": "15-5-0",
+      "Score %": "87.5%",
+      "Delta Elo": "+338",
+      "Mojo Performance Elo": 2538
+    },
+    {
+      "Stockfish Elo": 2400,
+      "Games": 20,
+      "Mojo (W-D-L)": "12-5-3",
+      "Score %": "72.5%",
+      "Delta Elo": "+168",
+      "Mojo Performance Elo": 2568
+    }
+  ]
+}
