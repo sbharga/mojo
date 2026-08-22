@@ -1,0 +1,3 @@
+variant,repetitions,budget_ms,instantiate_ms,first_move_ms,total_ms
+baseline,15,100,2.765,100.689,103.236
+simd,15,100,2.877,101.006,103.838

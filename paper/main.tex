@@ -17,6 +17,8 @@
 \usepackage{pgfplotstable}
 \pgfplotsset{compat=1.18}
 \usepackage[round,authoryear]{natbib}
+\renewcommand{\bibfont}{\small}
+\setlength{\bibsep}{1pt}
 \usepackage{doi}
 \usepackage{hyperref}
 \usepackage[nameinlink,capitalise]{cleveref}
@@ -33,7 +35,7 @@
   linkcolor=mojoblue,
   citecolor=mojoteal,
   urlcolor=mojoblue,
-  pdftitle={Mojo: Engineering a Lightweight Rust Chess Engine for the Web},
+  pdftitle={Mojo: What a Chess Engine Has to Become to Run in a Browser Tab},
   pdfauthor={sbharga}
 }
 \setlist{nosep,leftmargin=*}
@@ -44,508 +46,466 @@
 \newcommand{\code}[1]{\texttt{#1}}
 \newcommand{\yes}{\ensuremath{\checkmark}}
 
-\title{\vspace{-1.2em}\textbf{Mojo: Engineering a Lightweight Rust Chess Engine for the Web}}
+\title{\vspace{-1.2em}\textbf{Mojo: What a Chess Engine Has to Become to Run in a Browser Tab}}
 \author{sbharga\\[-0.2em]
   \small\url{https://github.com/sbharga/mojo}}
-\date{August 4, 2026}
+\date{August 21, 2026}
 
 \begin{document}
 \maketitle
 \vspace{-1.1em}
 
 \begin{abstract}
-Modern chess engines obtain much of their strength from an accumulation of
-carefully interacting search and evaluation techniques, yet deploying that
-accumulation in a browser introduces unusual constraints on code size,
-latency, cancellation, and portability.  This paper presents \engine, a chess
-engine written in safe Rust and compiled to WebAssembly.  The engine combines
-iterative-deepening principal-variation search with a clustered transposition
-table, staged move ordering, quiescence search, and several guarded selective
-search mechanisms.  Its handcrafted evaluator uses tapered midgame/endgame
-scores, incrementally maintained material and piece-square terms, cached pawn
-structure, nonlinear king danger, and a generated king-and-pawn bitbase.
-Offline tools fit 887 evaluation parameters from labeled positions and tune a
-small search-parameter surface through self-play.  At the systems boundary,
-separate browser workers isolate move and analysis searches, atomic stop flags
-provide prompt cancellation, and baseline and SIMD Wasm artifacts remain below
-a fixed 250,000-byte gzip limit.  On an Intel Core Ultra 5 235 under Node.js,
-fixed-depth measurements span 2.17--3.79 million nodes per second across four
-position classes.  SIMD changes geometric-mean single-PV throughput by only
-0.26\% on this platform, illustrating why feature availability and measured
-speedup should not be conflated.  The contribution is an integrated case study
-of how established chess-search methods can be arranged into a small,
-reproducible, browser-local engine rather than a claim of a new search
-algorithm or absolute playing strength.
+Chess engines are usually described by their search and evaluation
+techniques; a browser-deployed engine also has to satisfy constraints that
+have nothing to do with chess.  \engine{} is a safe-Rust engine compiled to
+WebAssembly and embedded in a React application, and this paper is about the
+mechanisms that constraint forced: a per-move latency contract that a single
+synchronous Wasm call can silently violate, a monotone cancellation
+watermark that survives being raced by the position it is cancelling, a
+node-rate-calibrated clock so polling stays cheap without going blind, a
+repetition-aware cache and cross-worker principal-variation seeding that let
+one browser tab reuse search work another instance already paid for, and a
+250,000-byte gzip ceiling that is the actual cause of several evaluation
+design choices usually explained the other way around.  None of \engine's
+search or evaluation techniques are individually novel; what this paper
+reports is what changes when they are assembled with no server, no
+persistent process, and a strict per-tab time and size budget.  It also
+reports a backend-free regression harness --- historical Wasm builds
+extracted from git history and played against each other inside the page,
+with a pentanomial SPRT computed client-side --- and measures \engine's
+playing strength as an explicit function of its move budget rather than a
+single number, because that is the axis a browser engine actually lives on.
 \end{abstract}
 
-\noindent\textbf{Keywords:} computer chess, alpha--beta search, handcrafted
-evaluation, Rust, WebAssembly, browser systems
+\noindent\textbf{Keywords:} WebAssembly, browser systems, chess engines,
+cancellation, alpha--beta search
 
 \section{Introduction}
 
-Chess has served as a compact laboratory for heuristic search since
-\citet{shannon1950chess} separated the problem into a game-tree search and a
-static evaluation of positions that cannot be searched to completion.  That
-division remains recognizable in contemporary engines, but the surrounding
-engineering has changed substantially.  A practical engine must reuse work,
-order moves well enough to make alpha--beta cutoffs effective, stabilize
-tactical leaf positions, allocate time under uncertainty, and validate
-aggressive selectivity statistically.  A browser engine must do so while also
-coexisting with the event loop, crossing a language boundary, and fitting
-inside a download budget.
+A native chess engine is handed a process, a CPU, and as much wall time as
+the operator allows it.  A browser-deployed engine is handed none of those
+guarantees outright: it competes with the page's own event loop, it is
+downloaded before it can run at all, its ``stop'' command has to reach code
+that is mid-recursion inside a single synchronous function call, and every
+position it has ever seen disappears the moment the tab closes.  \engine{}
+is a Rust engine compiled to WebAssembly \citep{haas2017wasm} and embedded in
+a React application \citep{mojo2026software}; its search and evaluation are
+conventional
+alpha--beta chess-programming techniques, described briefly in
+\cref{sec:background}.  The contribution of this paper is what those
+techniques had to be wrapped in to run correctly under those constraints,
+and what that wrapping costs and buys.
 
-\engine{} is a Rust engine compiled to WebAssembly and embedded in a React
-application \citep{mojo2026software}.  Its design goal is deliberately
-three-sided: remain lightweight, search quickly under short move budgets, and
-avoid strength regressions.  The first side is made concrete by a hard gzip
-limit of 250,000 bytes for both baseline and SIMD artifacts.  The second is
-addressed by persistent search state, selective search, incremental
-evaluation, and adaptive clock polling.  The third is addressed by unit tests,
-deterministic fixed-depth tests, color-swapped self-play, and a sequential test
-before search-parameter changes are accepted.
+Four constraints shape everything past \cref{sec:background}.  First, a
+\emph{per-move latency contract}: the UI promises that engine time is a
+bounded maximum per move, and a single \code{analyze\_depth} call is
+synchronous and uninterruptible from JavaScript's perspective, so nothing
+about that promise is automatic (\cref{sec:latency}).  Second, \emph{reuse
+across a position stream}: a browser session revisits positions constantly
+(undo, redo, pause/resume, a background analysis thread investigating a line
+the player is also about to reach), and a fixed-size in-memory transposition
+table does not survive that on its own (\cref{sec:reuse}).  Third, a
+\emph{download budget}: the engine must be small enough to arrive before the
+player loses interest, which is a hard 250,000-byte gzip ceiling in this
+project and is the actual reason several evaluation choices look the way
+they do (\cref{sec:delivery}).  Fourth, \emph{no backend}: there is no
+server to run regression matches on, so the comparison and validation
+tooling has to run inside the same browser tab as the product
+(\cref{sec:comparison}).
 
-This paper makes four contributions.  First, it documents the interaction of
-the engine's search mechanisms at the level of actual guards and data
-structures, rather than presenting an inventory of chess-programming terms.
-Second, it describes a compact classical evaluator whose expensive terms are
-separated into incrementally updated, pawn-cached, and dynamically scanned
-parts.  Third, it explains the concurrency and cancellation choices required
-to preserve a per-move time contract in the browser.  Finally, it reports a
-reproducible local benchmark that distinguishes node count, throughput,
-artifact size, and achieved depth.  These are systems measurements, not an Elo
-estimate.
+\Cref{sec:evaluation} reports measurements for each of these: cold-start
+latency, cancellation latency, PV-seeding node savings, and playing strength
+as a function of move budget rather than a single Elo number, alongside the
+existing throughput and artifact-size measurements this project already
+tracked in CI. \Cref{sec:limitations} discusses what these measurements do
+and do not establish.
 
-\section{Background and Related Work}
+\section{Background: What \texorpdfstring{\engine}{Mojo} Inherits}
+\label{sec:background}
 
-\subsection{Game-tree search}
+\engine{} plays chess the way most alpha--beta engines do.  Its search is
+iterative-deepening principal-variation search (PVS) over a negamax
+formulation \citep{marsland1987sss}, with a transposition table keyed by a
+Zobrist-style hash \citep{zobrist1970hashing} and a depth/age replacement
+policy in the tradition of \citet{breuker1994tt}.  Depth-limited horizons are
+stabilized with quiescence search \citep{beal1990quiescence}, and search is
+narrowed selectively rather than uniformly: null-move pruning
+\citep{donninger1993null}, futility and reverse-futility margins
+\citep{heinz1998futility}, ProbCut \citep{buro1995probcut}, and singular
+extensions \citep{anantharaman1990singular}, each behind the guard conditions
+in \cref{tab:selectivity}.  Its evaluator is a handcrafted, tapered
+midgame/endgame score whose 887 weights are fitted offline by outcome-labeled
+logistic regression \citep{buro1995features}; a small search-parameter
+surface is instead tuned by simultaneous perturbation stochastic
+approximation \citep{spall1992spsa} and accepted only after a sequential
+probability ratio test \citep{wald1945sprt}.  King-and-pawn endings are
+resolved exactly by a small retrograde-analysis bitbase computed at
+initialization \citep{thompson1986retrograde} rather than shipped as a table.
+Board representation and legal move generation come from \code{cozy-chess}
+0.3.4 \citep{cozychess2026}.
 
-For a side-to-move-relative evaluator, minimax can be written in the symmetric
-negamax form
-\begin{equation}
- V(s,d)=\max_{m\in M(s)} -V(T(s,m),d-1),
- \label{eq:negamax}
-\end{equation}
-where $M(s)$ is the set of legal moves and $T$ applies a move.  Alpha--beta
-search maintains lower and upper bounds $\alpha$ and $\beta$ and avoids
-exploring subtrees that cannot change the root decision.  Its effectiveness is
-dominated by move order; with ideal ordering the effective exponent can be
-roughly halved \citep{knuth1975alphabeta}.  Principal-variation search (PVS),
-closely related to NegaScout, searches the expected best move with a full
-window and later moves with a null window, re-searching only a move that proves
-the expectation wrong \citep{marsland1987sss}.
-
-Depth-limited evaluation is vulnerable to the horizon effect: a volatile
-position can conceal a forced exchange just beyond the nominal depth.
-Quiescence search extends selected tactical continuations until a stand-pat
-evaluation is more credible \citep{beal1990quiescence}.  Selective search goes
-further by reducing or pruning branches that are unlikely to influence the
-bound.  Null-move pruning uses the observation that forfeiting a turn is
-usually worse than making the best legal move, but requires care in zugzwang
-positions \citep{donninger1993null}.  Futility pruning rejects shallow moves
-whose optimistic static margin cannot raise alpha
-\citep{heinz1998futility}; ProbCut uses a reduced search above a margin to
-predict a full-depth cutoff \citep{buro1995probcut}.  Singular extensions take
-the complementary approach: search deeper when one move appears uniquely
-necessary \citep{anantharaman1990singular}.
-
-Repeated positions make chess a graph rather than a tree.  Position hashing
-originated as a practical board-game technique with Zobrist's tabulation
-method \citep{zobrist1970hashing}.  A transposition table stores a searched
-position's value, depth, bound type, and best move; collision and replacement
-policy matter because the table is necessarily finite
-\citep{breuker1994tt}.  \engine{} obtains legal move generation and board
-hashing from \code{cozy-chess} 0.3.4 \citep{cozychess2026}, while keeping its
-own rule-aware keys and search tables.
-
-\subsection{Evaluation, tuning, and testing}
-
-Handcrafted evaluation is commonly a weighted combination of chess features.
-Statistical fitting of feature weights from labeled positions predates current
-neural evaluators; logistic regression is attractive because it maps a linear
-score to an interpretable game-outcome probability
-\citep{buro1995features}.  Search parameters are harder to fit because their
-effect is observed through noisy game outcomes rather than a differentiable
-loss.  Simultaneous perturbation stochastic approximation (SPSA) estimates a
-multivariate update from only two noisy objective evaluations per iteration
-\citep{spall1992spsa}.  Candidate validation can then use a sequential
-probability ratio test (SPRT), which accumulates evidence until one of two
-hypotheses is accepted at specified error rates \citep{wald1945sprt}.
-
-Exact endgame knowledge provides a useful exception to heuristic evaluation.
-Retrograde analysis propagates terminal outcomes backward through the state
-space \citep{thompson1986retrograde}.  \engine{} applies the same fixed-point
-idea to the small king-and-pawn-versus-king (KPK) domain at initialization,
-rather than shipping a large general tablebase.
-
-\section{System Architecture}
-
-\begin{figure*}[t]
+\begin{table}[t]
 \centering
-\resizebox{\textwidth}{!}{%
-\begin{tikzpicture}[
-  font=\small,
-  node distance=6mm and 8mm,
-  box/.style={draw=mojoblue, rounded corners=2pt, fill=mojolight,
-              minimum height=8mm, align=center, inner sep=4pt},
-  core/.style={box, draw=mojoteal, fill=mojoteal!9},
-  offline/.style={box, draw=mojogold, fill=mojogold!10},
-  arrow/.style={-{Latex[length=2mm]}, thick, draw=mojogray}
-]
-  \node[box, minimum width=23mm] (ui) {React UI\\game state};
-  \node[box, right=of ui, yshift=8mm, minimum width=27mm] (move) {move worker\\feature probe};
-  \node[box, right=of ui, yshift=-8mm, minimum width=27mm] (analysis) {analysis worker\\feature probe};
-  \node[core, right=of move, minimum width=29mm] (engine1) {\code{Engine} instance A\\persistent state};
-  \node[core, right=of analysis, minimum width=29mm] (engine2) {\code{Engine} instance B\\persistent state};
-  \node[core, right=11mm of engine1, yshift=-8mm, minimum width=29mm] (engine) {common Rust/Wasm\\engine design};
-  \node[core, right=of engine, yshift=12mm] (search) {PVS search\\ordering and pruning};
-  \node[core, right=of engine] (state) {TT, histories,\\pawn cache};
-  \node[core, right=of engine, yshift=-12mm] (eval) {incremental and\\dynamic evaluation};
-  \node[offline, below=10mm of engine] (tools) {offline fitting, SPSA,\\self-play and SPRT};
+\small
+\caption{Selective-search mechanisms \engine{} inherits, compressed to their
+guard conditions; none of this cascade is original to \engine{}.}
+\label{tab:selectivity}
+\begin{tabularx}{\columnwidth}{@{}p{0.19\columnwidth}X@{}}
+\toprule
+Mechanism & Guard \\
+\midrule
+Null move & Non-PV, not in check, non-pawn material, depth $\geq3$; verified at depth $\geq10$ \citep{donninger1993null} \\
+Futility / ProbCut & Static or reduced-depth margin test, non-PV, not in check, shallow/bounded depth \citep{heinz1998futility,buro1995probcut} \\
+Late-move reduction & Depth/move-index table, adjusted for PV, checks, history; re-searched on alpha improvement \\
+Singular extension & Exclusion search on a deep TT bound; global two-ply budget \citep{anantharaman1990singular} \\
+\bottomrule
+\end{tabularx}
+\end{table}
 
-  \draw[arrow] (ui) -- (move);
-  \draw[arrow] (ui) -- (analysis);
-  \draw[arrow] (move) -- (engine1);
-  \draw[arrow] (analysis) -- (engine2);
-  \draw[arrow] (engine1) -- (engine);
-  \draw[arrow] (engine2) -- (engine);
-  \draw[arrow] (engine) -- (search);
-  \draw[arrow] (engine) -- (state);
-  \draw[arrow] (engine) -- (eval);
-  \draw[arrow, dashed] (tools) -- (engine);
-\end{tikzpicture}}
-\caption{\engine{} execution architecture.  The move and analysis workers own
-separate engine instances; the common-design box denotes shared implementation,
-not shared runtime state.  The dashed arrow is an offline configuration path.}
-\label{fig:architecture}
-\end{figure*}
+None of this is what makes \engine{} a \emph{web} engine.  A native
+command-line build of the same search and evaluation would need almost
+nothing described past this point.  What follows is specific to running
+inside a browser tab.
 
-\Cref{fig:architecture} separates the interactive and offline paths.  The
-Wasm-facing \code{Engine} accepts FEN plus prior positions, exposes one
-completed depth at a time, and returns plain principal-variation data.  A
-persistent \code{SearchCore} keeps its transposition table and learned
-ordering histories across iterative depths and adjacent positions.  The only
-board mutation occurs in immutable child positions supplied by safe Rust APIs;
-crate-wide \code{unsafe\_code} is forbidden.
+\section{Preserving a Per-Move Latency Contract}
+\label{sec:latency}
 
-The browser owns two workers.  The \emph{move} instance performs the
-time-critical search that chooses a move.  The \emph{analysis} instance may
-compute MultiPV output continuously.  A Wasm call is synchronous within its
-worker; therefore, placing both workloads behind one instance would allow a
-queued analysis call to consume a move's nominal budget before the move search
-started.  Isolation makes the budget a property of the move computation rather
-than of queueing order.
+The UI's contract with the player is that the engine's move budget is a
+maximum, not an estimate: a 500\,ms setting should never cost 5\,s.  Three
+properties of the runtime work against that contract, and \engine{}'s
+concurrency design exists specifically to defeat them.
 
-At startup, each worker validates a small SIMD module and chooses either the
-baseline or \code{+simd128} artifact.  WebAssembly supplies compact,
-validated, language-independent code and predictable interoperability with a
-host environment \citep{haas2017wasm}.  Cross-origin-isolated deployments add
-a \code{SharedArrayBuffer} stop word.  The Rust search polls it with atomic
-loads between adaptively sized node batches; environments without shared
-memory fall back to cancellation between completed depths.  The design remains
-functional in both cases, but prompt mid-iteration cancellation requires the
-appropriate COOP/COEP headers.
+\subsection{One engine cannot serve two searches}
 
-\section{Search Design}
+\code{Engine::analyze\_depth} is a single synchronous, uninterruptible Wasm
+call: from JavaScript's point of view, control does not return until Rust
+does.  The UI runs two kinds of search concurrently in spirit --- the move
+that is about to be played, and a background MultiPV analysis of the current
+line --- and if both shared one \code{Engine} instance, a queued background
+analysis call could occupy the call stack when a move request arrives,
+stacking that analysis's full budget in front of the move search
+(\code{web/src/engine/useEngine.ts}).  \engine{} instead gives \code{move}
+and \code{analysis} each a dedicated Web Worker and a dedicated \code{Engine}
+instance (\cref{fig:architecture}); they never share memory, so starting a
+\code{move} search is never delayed by whatever the \code{analysis} worker
+happens to be doing.  This is why \cref{sec:multipv} matters operationally
+and not just as a cost curve: MultiPV=3 costs 2.8--4.1$\times$ the node count
+of a single-PV search at the same depth in this project's four-position
+suite, and that cost is fully absorbed by an isolated worker rather than
+borrowed from the move budget.
 
 \begin{figure}[t]
 \centering
 \resizebox{\columnwidth}{!}{%
 \begin{tikzpicture}[
-  font=\scriptsize,
-  node distance=3.2mm,
-  stage/.style={draw=mojoblue, rounded corners=2pt, fill=mojolight,
-                minimum width=43mm, minimum height=6.4mm, align=center},
-  decision/.style={diamond, draw=mojoteal, fill=mojoteal!8,
-                   aspect=2.5, align=center, inner sep=1.5pt},
-  arrow/.style={-{Latex[length=1.6mm]}, draw=mojogray}
+  font=\small,
+  node distance=6mm and 7mm,
+  box/.style={draw=mojoblue, rounded corners=2pt, fill=mojolight,
+              minimum height=8mm, align=center, inner sep=4pt},
+  core/.style={box, draw=mojoteal, fill=mojoteal!9},
+  arrow/.style={-{Latex[length=2mm]}, thick, draw=mojogray}
 ]
-  \node[stage] (id) {next iterative-deepening target};
-  \node[stage, below=of id] (asp) {aspiration window and root PVS};
-  \node[stage, below=of asp] (tt) {draw/mate checks; TT probe; IIR};
-  \node[stage, below=of tt] (sel) {null move; static pruning; ProbCut; singular test};
-  \node[stage, below=of sel] (pick) {staged move picker and guarded pruning};
-  \node[decision, below=of pick] (depth) {depth $\leq 0$?};
-  \node[stage, below left=5mm and 2mm of depth] (q) {quiescence:\\checks/tactics};
-  \node[stage, below right=5mm and 2mm of depth] (child) {PVS/LMR child search;\\conditional re-search};
-  \node[stage, below=13mm of depth] (store) {store bound, PV, histories; update time model};
-  \draw[arrow] (id) -- (asp);
-  \draw[arrow] (asp) -- (tt);
-  \draw[arrow] (tt) -- (sel);
-  \draw[arrow] (sel) -- (pick);
-  \draw[arrow] (pick) -- (depth);
-  \draw[arrow] (depth) -- node[above left]{yes} (q);
-  \draw[arrow] (depth) -- node[above right]{no} (child);
-  \draw[arrow] (q) -- (store);
-  \draw[arrow] (child) -- (store);
-  \draw[arrow, rounded corners=3pt] (store.east) -| ([xshift=5mm]child.east) |- node[pos=0.75, right, font=\tiny] {time permits} (id.east);
+  \node[box, minimum width=20mm] (ui) {React UI\\game state};
+  \node[core, right=of ui, yshift=9mm, minimum width=26mm] (move) {move worker\\Engine A};
+  \node[core, right=of ui, yshift=-9mm, minimum width=26mm] (analysis) {analysis worker\\Engine B};
+  \node[box, right=of move, minimum width=24mm] (ttA) {TT, histories};
+  \node[box, right=of analysis, minimum width=24mm] (ttB) {TT, histories};
+
+  \draw[arrow] (ui) -- node[above,font=\tiny]{analyze} (move);
+  \draw[arrow] (ui) -- node[below,font=\tiny]{analyze} (analysis);
+  \draw[arrow] (move) -- (ttA);
+  \draw[arrow] (analysis) -- (ttB);
+  \draw[arrow, dashed, mojogold, very thick]
+    (ui.north) to[out=140,in=180] node[above,font=\tiny,text=mojogold]
+    {Atomics cancel watermark} ([xshift=-2mm]move.north);
+  \draw[arrow, dashed, mojogold, very thick]
+    (ui.south) to[out=-140,in=180] node[below,font=\tiny,text=mojogold]
+    {Atomics cancel watermark} ([xshift=-2mm]analysis.south);
+  \draw[arrow, dotted, mojoblue, very thick]
+    (ttB.south) to[out=-60,in=60] node[right,font=\tiny,text=mojoblue,align=left]
+    {seed\_pv\\(PV replay)} (ttA.north);
 \end{tikzpicture}}
-\caption{Search control flow.  The ordering is significant: cheap bound and
-static tests precede move construction, while reduced searches are verified
-when they can change alpha.}
-\label{fig:search-flow}
+\caption{\engine{} execution architecture. Two isolated Engine instances share
+no memory: cancellation reaches both through a shared \code{Atomics}
+watermark (\cref{sec:cancel}), and a PV crosses from the analysis worker's TT
+to the move worker's TT only by explicit replay (\cref{sec:reuse}), never by
+sharing state.}
+\label{fig:architecture}
 \end{figure}
 
-\subsection{Iterative deepening and root search}
+\subsection{A stale cancel must not kill a live search}
+\label{sec:cancel}
 
-The public analysis operation searches exactly one requested depth, while the
-worker drives iterative deepening.  This division gives JavaScript a safe
-cancellation and reporting boundary without duplicating search logic.  Within
-one depth, the previous iteration's score centers a 20-centipawn aspiration
-window.  A fail-low or fail-high widens only the failed side; after four
-retries, the search falls back to the full interval.  Mate-range scores bypass
-aspiration because their distance-sensitive representation should not be
-clipped around an ordinary centipawn estimate.
+Cancelling a search sounds like a boolean, but a boolean is wrong here: if a
+player moves twice quickly, two cancellations for two different requests can
+be in flight, and a delayed handler for the \emph{older} one must not stop
+the \emph{newer} search that has since started.  \engine{} instead threads a
+monotonically increasing \emph{request id} through the stack and compares it
+against an \code{Atomics}-backed watermark: a worker only treats the search
+as cancelled when the stored watermark is greater than or equal to the id of
+the search actually running (\code{stopSignal.ts}; \code{search/mod.rs}
+\code{expired()}). A late message from request 6 cannot cancel request 7 just
+because it arrives after it starts.
 
-At the root, the first move receives a full-window search.  Later moves first
-receive a zero-window PVS probe and are re-searched only when the probe lies
-between alpha and beta.  Root order persists the previous score and subtree
-node count for each move, placing a previously strong and expensive move
-early.  MultiPV repeats the root search while excluding already selected root
-moves.  Excluded searches do not overwrite the primary root transposition
-entry, preventing a second-best line from displacing the principal move in the
-next iteration.
+Cross-origin-isolated deployments back this watermark with a
+\code{SharedArrayBuffer} so the Rust search loop polls it with a plain
+atomic load between node batches; deployments without the COOP/COEP headers
+that isolation requires fall back to cancelling between completed iterative
+depths instead of mid-iteration. \Cref{tab:cancellation} measures what the
+first path actually costs: with the watermark backed by a real
+\code{SharedArrayBuffer} and the cancelling store issued from a separate
+thread (a Node \code{worker\_thread}, mirroring the browser's
+main-thread/worker-thread split), median observed cancellation latency is
+under 1\,ms at every move budget tested, consistent with the calibrated
+1.5\,ms polling target described next. A single-threaded harness cannot
+observe this number at all --- nothing can interrupt a synchronous call from
+the thread that issued it --- which is itself a small illustration of why
+this mechanism has to be designed around genuine concurrency rather than
+tested in isolation.
 
-The worker stops deepening using more than elapsed wall time.  It tracks score
-stability, how much work concentrated in the best root move, and a smoothed
-effective branching factor (EBF).  The last iteration time and EBF predict the
-next iteration's cost.  A stable, inexpensive decision can stop near half the
-nominal budget; a score drop or unstable best move allows up to roughly 80\%.
-The EBF gate blocks an iteration predicted not to fit, except when the soft
-fraction indicates that extra effort is warranted.  These policies explain
-why a larger limit need not increase completed depth in every row of
-\Cref{fig:timed-depth}: the engine may begin and time out in a deeper
-iteration while still returning the last complete result.
-
-\subsection{Transpositions, draws, and terminal scores}
-
-The transposition table contains $2^{18}$ cache-line-aligned buckets, each
-holding four 16-byte entries, for $2^{20}$ entries and 16 MiB total.  An entry
-stores a 64-bit key, encoded move, score, optional static evaluation, signed
-depth, bound type, and six-bit generation.  Exact, lower, and upper bounds are
-consumed only when their stored depth is sufficient.  Mate scores are adjusted
-by ply on store and load so that transposing into a line preserves preference
-for a shorter mate or longer defense.  Same-key shallow writes do not replace
-deeper results; collision replacement balances depth and age.
-
-Search keys incorporate both position repetition state and the halfmove clock.
-The latter is necessary because a visually identical board near the fifty-move
-boundary has different legal value.  The search detects the fifty-move rule,
-insufficient material, and threefold repetition from real prior positions and
-the current path.  Null moves are marked by a path boundary and cannot create a
-fictional repetition against real game history.  Checkmate scores are
-$\pm(30000-p)$ at ply $p$; stalemate and detected rule draws score zero.
-
-\subsection{Ordering and selective search}
-
-The staged move picker delays work until it can matter.  It returns a legal TT
-move first, generates tactical moves ordered by victim value and capture
-history, and runs static exchange evaluation (SEE) only as each tactical move
-is selected.  Non-losing tactics precede killers, the countermove, and a threat
-move learned from a failed null search.  Quiet moves then use main history plus
-one- and two-ply continuation history; losing captures are deferred to the
-end.  A root-specific picker uses earlier iteration scores and subtree effort.
-
-\begin{table*}[t]
+\begin{table}[t]
 \centering
 \small
-\caption{Selective mechanisms in \engine{}.  The safeguards are part of the
-algorithm: they constrain where a heuristic assumption may discard or reduce
-work.}
-\label{tab:selectivity}
-\begin{tabularx}{\textwidth}{@{}p{0.16\textwidth}p{0.34\textwidth}X@{}}
+\caption{Cancellation latency: time from an \code{Atomics.store} on the
+watermark, issued from a separate thread mid-search, to the search returning.
+20 samples per budget; the store fires roughly a third of the way through
+the budget.}
+\label{tab:cancellation}
+\pgfplotstabletypeset[
+  col sep=comma,
+  columns={budget_ms,cancel_after_ms,latency_median_ms,latency_max_ms},
+  columns/budget_ms/.style={column type=r, string type, column name={Budget (ms)}},
+  columns/cancel_after_ms/.style={column type=r, string type, column name={Cancel at (ms)}},
+  columns/latency_median_ms/.style={column type=r, string type, column name={Median (ms)}},
+  columns/latency_max_ms/.style={column type=r, string type, column name={Max (ms)}},
+  every head row/.style={before row=\toprule, after row=\midrule},
+  every last row/.style={after row=\bottomrule},
+]{data/cancellation.csv}
+\end{table}
+
+A cancelled search is also distinguished from a merely \emph{timed-out} one:
+a timed-out iteration may still surface a sound partial root line, because
+every root move that contributed to it finished a full search --- only a
+later root move, or a deeper depth, never got the chance to run.  A
+cancellation, by contrast, must surface nothing, because the position it was
+searching is already stale; \code{search/mod.rs} tracks this as a distinct
+\code{cancelled} flag from \code{timed\_out}, and it is asserted directly by
+this repository's cancellation test. This distinction only matters for
+single-PV move search: MultiPV analysis has no such partial fallback (a
+truncated line count would visibly flicker the analysis panel), so it keeps
+predicting ahead instead of ever returning a partial result
+(\code{searchControl.ts}).
+
+\subsection{Yielding between depths, and polling without going blind}
+
+Iterative deepening is driven from JavaScript, one \code{analyze\_depth} call
+per depth, specifically so the worker can yield back to the event loop
+between depths.  The yield has to be a real macrotask
+(\code{setTimeout(…, 0)}), not a microtask: a queued worker \code{message}
+event --- carrying a newer cancellation --- is itself a macrotask, and a
+microtask yield would let the current depth's synchronous call keep
+starving it. Skipping this yield would mean a stale search's full remaining
+budget stacks in front of the next request's, silently breaking the same
+latency contract \cref{sec:cancel} exists to protect.
+
+Inside one depth, the Rust node loop cannot check wall-clock time on every
+node --- crossing to \code{performance.now()} is not free, and is
+coarsened by browsers for timing-attack mitigation --- so it checks every
+$N$ nodes instead. $N$ is not fixed: it is recalibrated every iteration from
+an exponentially weighted measurement of the engine's own nodes-per-ms rate,
+targeting a fixed 1.5\,ms wall-clock granularity between checks and clamped
+to $[64, 4096]$ nodes (\code{calibrate\_clock\_checks},
+\code{search/mod.rs}). A position where nodes are cheap gets checked more
+often in node-count terms; a position where nodes are expensive gets checked
+less often, so the check itself never becomes a meaningful fraction of
+search time. This is also what \cref{tab:cancellation}'s sub-millisecond
+numbers are downstream of: they are close to the calibration target because
+that is precisely what calibration is tuned to deliver.
+
+\section{Reusing Work Across a UI's Position Stream}
+\label{sec:reuse}
+
+A game's positions are not a random walk through the search space; a UI
+session revisits them constantly through undo/redo, pausing and resuming on
+the same position, and history navigation. \engine's persistent
+\code{SearchCore} keeps its transposition table and ordering histories
+across iterative depths and \emph{adjacent} positions within one worker, but
+two problems remain: the fixed-size TT has almost certainly evicted an old
+position's entries by the time a session revisits it, and the two isolated
+Engine instances from \cref{sec:latency} cannot help each other by sharing
+memory at all.
+
+\subsection{A cache keyed on more than the board}
+
+\code{AnalysisCache} (\code{analysisCache.ts}) lets the UI skip re-searching
+a fen it has already solved to sufficient depth. The key cannot be the fen
+alone: two boards with identical piece placement can have different correct
+evaluations if their repetition history differs, since one may be a legal
+draw claim and the other not.  \code{repetitionFingerprint.ts} hashes each
+prior position with an FNV-1a/SplitMix64 mix and \emph{sums} the hashes
+across a window bounded by the halfmove clock, rather than hashing the
+sequence positionally --- the sum is commutative, so it depends on the
+\emph{multiset} of recent positions (correctly reflecting how many times
+each has occurred) but not on their order, which is exactly the quantity
+that determines threefold-repetition status.
+
+\subsection{Seeding one worker's search from another's}
+
+Because the \code{move} and \code{analysis} Engine instances share no
+memory, a deep analysis of the current position cannot warm the move
+worker's transposition table by osmosis. \code{pvSeed.ts} instead replays a
+PV explicitly: if the analysis worker already searched the current line and
+its PV's first move matches the move the opponent actually played, the move
+worker's \code{seed\_pv} call inserts the remainder of that PV directly into
+its own TT as one-ply-shallower entries before searching the resulting
+position. \Cref{tab:seeding} measures the effect across four position types
+and three analysis depths, mirroring this exact ponder-hit path (search
+position $A$ to depth $D$, replay the PV's continuation into position $B$
+after its first move, and seed a $D{-}1$ search of $B$): warm searches use
+noticeably fewer nodes than cold ones in most cells, but not uniformly ---
+two of twelve cells cost more with seeding than without, because a seeded
+aspiration window centered on the source score can trigger extra fail-high
+or fail-low retries. Seeding is a speculative optimization, correct by
+construction (the seed is always the actual continuation the position
+reached) but not a strict node-count guarantee, and it is reported here as
+such rather than smoothed into a single average.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Cross-worker PV seeding: node count for a $(D{-}1)$-depth search of
+the position reached after the analysis worker's depth-$D$ PV first move,
+cold versus seeded from that PV's remainder.}
+\label{tab:seeding}
+\pgfplotstabletypeset[
+  col sep=comma,
+  columns={position,analysis_depth,cold_nodes,warm_nodes,node_reduction_pct},
+  columns/position/.style={column type=l, string type, column name={Position}},
+  columns/analysis_depth/.style={column type=r, string type, column name={$D$}},
+  columns/cold_nodes/.style={column type=r, string type, column name={Cold nodes}},
+  columns/warm_nodes/.style={column type=r, string type, column name={Warm nodes}},
+  columns/node_reduction_pct/.style={column type=r, string type, column name={$\Delta$ (\%)}},
+  every head row/.style={before row=\toprule, after row=\midrule},
+  every last row/.style={after row=\bottomrule},
+]{data/seeding.csv}
+\end{table}
+
+\section{Delivering the Engine}
+\label{sec:delivery}
+
+Both the baseline and \code{+simd128} Wasm artifacts must stay under a fixed
+250,000-byte gzip ceiling, checked in CI on every push. This is not a
+target chosen after the fact to describe an already-small engine; it is a
+constraint that shaped design decisions directly.
+
+\subsection{Handcrafted evaluation as a size decision}
+
+A modern NNUE evaluator's dominant cost is not compute, it is the trained
+weight file --- typically megabytes, an order of magnitude past the entire
+size budget \engine{} has for its whole engine. Retaining a handcrafted,
+tapered evaluator with piece-square and feature weights fitted offline
+(\cref{sec:background}) is therefore not primarily a search-speed choice:
+the fitted values themselves cost nothing to ship, only the arithmetic that
+combines them, which is already present in the binary regardless of the
+weights' values. The 192\,KiB online correction-history table
+(\code{search/correction.rs}) that compensates for the evaluator's
+systematic residual error is similarly a \emph{runtime-allocated} structure,
+not a shipped asset --- it costs peak memory, not download bytes.
+
+\subsection{Compute-at-init instead of ship-a-table}
+
+The KPK bitbase is the same trade-off in miniature: rather than shipping a
+generated table, \engine{} runs a monotone retrograde fixed-point over
+$2\cdot24\cdot64\cdot64$ normalized states at \code{Engine} construction and
+keeps the 24\,KiB result in memory for the session, paying an
+initialization-time cost invisible to the download budget. The optional
+opening book follows the opposite discipline for the same reason: its
+20,472-byte encoded table is excluded from the default build entirely
+(Cargo feature \code{book}) because it would consume roughly a tenth of the
+whole gzip ceiling for a feature most sessions do not need at all.
+
+\subsection{Picking an artifact before downloading either}
+
+\engine{} ships two Wasm artifacts, baseline and \code{+simd128}, and each
+worker picks between them \emph{before} downloading either: a 29-byte SIMD
+validation module is checked against \code{WebAssembly.validate} first
+(\code{wasmFeatures.ts}), so a browser without fixed-width SIMD support never
+fetches an artifact it cannot run. \Cref{tab:artifacts} shows what that
+second artifact actually costs: 2,760 raw bytes and 285 gzip bytes over
+baseline, essentially free against the ceiling --- but \cref{fig:throughput}
+in \cref{sec:evaluation} shows its measured single-PV throughput benefit on
+this platform is a geometric mean of $+0.26\%$, positive but small enough
+that the two facts have to be reported separately: cheap to ship is not the
+same claim as fast to run, and this project's CI keeps both artifacts under
+the same ceiling rather than picking one based on which claim sounds better.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Wasm artifact and memory measurements ($2^{20}$-byte MiB), current
+\code{main} (\code{19fd40e}).}
+\label{tab:artifacts}
+\begin{tabular}{@{}lrr@{}}
 \toprule
-Mechanism & Action & Principal safeguards \\
+Metric & Baseline & SIMD \\
 \midrule
-Null move & Reduced null-window search with depth-dependent reduction; record a threat after fail-low & Non-PV, not in check, non-pawn material, depth $\geq3$, halfmove clock $<90$; verification at depth $\geq10$ \\
-Reverse futility / razoring & Static fail-high cutoff or shallow fail-low quiescence probe & Non-PV, not in check, non-mate window; bounded to shallow depths and checked for legal moves \\
-ProbCut & Search promising captures at depth $d-4$ against $\beta+180$ & Depth $\geq5$, non-PV, not in check, SEE-good captures only; store a reduced-depth lower bound \\
-Late-move reduction & Reduce late quiet zero-window probes according to depth and move index & No reduction for captures or evasions; adjust for PV/cut node, checks, history, improving eval; re-search on alpha improvement \\
-Move pruning & SEE, late-move, history, and futility rejection & Non-PV, not in check, not first move, not checking, not a detected threat defense; shallow-depth bounds \\
-Singular extension & Exclusion search extends a uniquely strong TT move by one or two plies & Depth $\geq7$, sufficiently deep lower/exact TT entry, non-mate score, global two-extension budget \\
-Qsearch delta & Skip an exchange that cannot reach alpha even with captured material plus margin & Never while in check; retain promotions and checks; reject SEE-losing captures first \\
+Raw module (bytes) & 1,456,876 & 1,459,636 \\
+gzip (bytes) & 223,268 & 223,553 \\
+Brotli-11 (bytes) & 132,934 & 133,266 \\
+Peak memory (MiB) & 19.69 & 19.69 \\
 \bottomrule
-\end{tabularx}
-\end{table*}
+\end{tabular}
+\end{table}
 
-Late-move reductions are precomputed in a 32-by-64 table with approximately
-logarithmic growth in depth and move index.  Context then modifies the base
-reduction: PV nodes, checking moves, improving evaluations, and strong history
-reduce it; cut nodes and poor history increase it.  Any reduced probe that
-raises alpha is repeated at full depth, followed by a full-window re-search if
-it remains inside the window.  Thus LMR is a speculative allocation of depth,
-not an unconditional acceptance of a reduced score.
+\section{Evaluation}
+\label{sec:evaluation}
 
-Null-move pruning uses reduction $R=2+\lfloor d/4\rfloor$.  At depth ten and
-above, a null fail-high triggers a verification search from the original
-position with null pruning disabled.  The engine also recovers the null line's
-threat move after fail-low and promotes defenses against that threat in
-ordering and pruning.  The material and halfmove guards specifically address
-the zugzwang and rule-boundary failure modes described in the null-move
-literature \citep{donninger1993null}.
+All measurements use an Intel Core Ultra 5 235 (14 visible cores, 24\,MiB L3
+cache), 64-bit Linux under WSL2, Node.js v24.19.0, Rust 1.97.1. Each
+Wasm-facing measurement instantiates a fresh \code{Engine} so an earlier
+position or configuration cannot warm shared state; every reproduction
+script lives under \code{paper/scripts/} and writes the CSV it is plotted
+from, so every number below is regenerable from the checked-in repository
+rather than transcribed.
 
-ProbCut and singular extension make opposite predictions from deeper TT or
-reduced-search evidence.  ProbCut asks whether a good capture already exceeds
-a raised beta at reduced depth.  Singular extension performs an exclusion
-search without the TT move; a large fail-low marks that move as unique, while
-multiple viable alternatives can produce a multi-cut or a negative extension.
-Check extensions and singular extensions share a two-ply per-line budget,
-preventing unbounded growth.
+\subsection{Cold start: the number a browser session actually waits on}
 
-At depth zero, fail-soft quiescence searches all legal evasions while in check,
-or captures and promotions otherwise.  It retains a stand-pat lower bound only
-when standing pat is legal.  SEE and delta pruning remove losing or
-insufficient captures, except promotions and moves giving check.  Quiescence
-results are stored as depth-zero TT bounds and can be reused by later probes.
+Throughput benchmarks assume the engine is already warm; a browser session
+does not start there. \Cref{tab:coldstart} splits the wait into Wasm
+compile/instantiate and the first \code{analyze\_depth} call at a 100\,ms
+budget --- the app's minimum think-time setting --- median of 15 fresh
+instantiations per artifact.  Instantiation itself is a few milliseconds;
+essentially the entire cold-start cost is the deliberate 100\,ms search
+budget, meaning a session is playable within roughly one think-time interval
+of the module finishing download, not meaningfully slower.
 
-\section{Evaluation and Learning}
+\begin{table}[t]
+\centering
+\small
+\caption{Cold start at a 100\,ms move budget, median of 15 samples.}
+\label{tab:coldstart}
+\pgfplotstabletypeset[
+  col sep=comma,
+  columns={variant,instantiate_ms,first_move_ms,total_ms},
+  columns/variant/.style={column type=l, string type, column name={Variant}},
+  columns/instantiate_ms/.style={column type=r, string type, column name={Instantiate (ms)}},
+  columns/first_move_ms/.style={column type=r, string type, column name={First move (ms)}},
+  columns/total_ms/.style={column type=r, string type, column name={Total (ms)}},
+  every head row/.style={before row=\toprule, after row=\midrule},
+  every last row/.style={after row=\bottomrule},
+]{data/coldstart.csv}
+\end{table}
 
-\subsection{Tapered handcrafted evaluation}
-
-The evaluator returns a side-to-move-relative score compatible with
-\cref{eq:negamax}.  Material and piece-square values are packed as signed
-midgame and endgame 16-bit halves of one 32-bit integer.  Additions therefore
-update both components together.  With phase $\phi\in[0,24]$, the white-frame
-score is
-\begin{equation}
- E_{\mathrm{white}}=
- \frac{\phi E_{\mathrm{MG}}+(24-\phi)E_{\mathrm{EG}}}{24}.
- \label{eq:taper}
-\end{equation}
-Minor pieces contribute one phase unit, rooks two, queens four, and pawns and
-kings zero.  The result is converted to the side-to-move frame, receives a
-tempo bonus, and is finally scaled for draw proximity.
-
-An \code{EvalAccumulator} travels with every searched position.  Moving a
-piece subtracts its material and piece-square contribution at the origin and
-adds the destination contribution; captures, en passant, promotion, and
-castling have explicit updates.  The same accumulator maintains phase and a
-pawn-only hash.  Debug builds compare incremental children against full
-recomputation across move types.
-
-Terms that depend only on pawn placement are stored in a direct-mapped 128-KiB
-pawn cache.  The cached record contains packed structure score and passed-pawn
-bitboards.  Doubled, isolated, connected, backward, passed, and protected
-passed pawns are computed here.  King-distance bonuses for passers are
-deliberately excluded because two boards with the same pawn key can have
-different king locations.
-
-Dynamic scanning walks knights, bishops, rooks, queens, and kings once.  It
-accumulates safe mobility, attack maps, attacks into each king zone, and threat
-classes.  A nonlinear 32-entry king-danger curve combines the number and type
-of attackers, attacked king-zone squares, safe checks, pawn shelter, and pawn
-storms.  Additional terms cover the bishop pair, open and semi-open rook
-files, rooks behind passers or on the seventh rank, minor-piece outposts,
-hanging pieces, and attacks by pawns or minors on more valuable pieces.
-Opposite-colored-bishop endings scale the complete score toward zero.
-
-Bare-king endings need a gradient before mate appears in the horizon.  The
-endgame component rewards driving the defending king toward an edge, bringing
-the attacking king closer, and confining it with a rook.  Bishop-and-knight
-mate instead rewards the corner controlled by the bishop.  Exact KPK positions
-override this guidance.  At initialization, a monotone fixed-point procedure
-classifies $2\cdot24\cdot64\cdot64$ normalized states and packs the winning set
-into 24 KiB.  File and color symmetry map every legal KPK board into that
-domain; wins receive a large signed score and known draws return zero.  This is
-a small compute-at-initialization instance of retrograde analysis
-\citep{thompson1986retrograde}.
-
-The fifty-move rule is integrated twice.  Search returns an exact draw at 100
-half-moves, while evaluation before that boundary is damped toward zero.  This
-prevents a large heuristic score at half-move 99 from obscuring the immediate
-rule constraint.  The same rule-aware key prevents unsafe TT reuse across
-different halfmove clocks.
-
-\subsection{Correction history}
-
-The raw evaluator has repeatable residual error.  Three side-indexed correction
-tables learn bounded adjustments keyed by pawn structure, material counts, and
-non-pawn piece placement.  Together they occupy 192 KiB.  At a quiet searched
-node, an exact or compatible bound trains the residual between corrected
-static evaluation and search result; capture fail-highs are excluded because
-their tactical score is a poor training target.  A depth-dependent weighted
-update saturates each entry, and the three table values contribute a bounded
-centipawn correction.  This is online calibration of the existing evaluator,
-not a replacement value function.
-
-\subsection{Offline parameter fitting}
-
-The evaluator exposes 887 tunable parameters: piece-square cells and paired
-midgame/endgame weights for material, pawn structure, mobility, king attack,
-passers, threats, outposts, and rook features.  A training row contains a game
-result $y\in\{0,\tfrac12,1\}$ and FEN.  The tuner removes non-quiet positions,
-deduplicates board hashes, averages conflicting labels, and deterministically
-partitions examples into training and validation sets.  Labels are transformed
-into the side-to-move frame used by the evaluator.
-
-For feature vector $x$ and weight vector $w$, the predicted result is
-\begin{equation}
- p(y=1\mid x)=\sigma\!\left(\frac{x^\top w}{K}\right),\qquad K=400,
- \label{eq:logistic}
-\end{equation}
-and gradient descent minimizes cross-entropy plus a small $L_2$ penalty toward
-the checked-in weights.  Material anchors prevent the fit from changing the
-scale arbitrarily, and left--right piece-square symmetry is restored before
-emission.  This implements outcome-labeled logistic feature fitting in the
-tradition of \citet{buro1995features}; the repository names the workflow
-``Texel tuning.''  Generated source contains only deltas from readable
-hand-authored bases.
-
-Six search constants---aspiration width, reverse-futility margin, two futility
-margins, ProbCut margin, and quiescence delta margin---form a separate SPSA
-surface.  In iteration $k$, random signs $\Delta_k$ define bounded candidates
-$\theta_k^{\pm}=\theta_k\pm c_k\Delta_k$.  A color-swapped self-play match
-supplies a noisy score difference, and the update follows the simultaneous
-perturbation estimate \citep{spall1992spsa}.  Seeds, bounds, schedules, opening
-count, and time control are recorded.  Tuning output remains exploratory until
-a 128-opening, 100-ms-per-move SPRT accepts the $+10$ Elo hypothesis with
-$\alpha=\beta=0.05$.  The acceptance policy follows Wald's sequential testing
-framework \citep{wald1945sprt}; it does not turn a small tuning match into a
-strength claim.
-
-\section{Experimental Method}
-
-All measurements use repository revision \code{aeb6b5b}.  The host is an Intel
-Core Ultra 5 235 with 14 visible cores and 24 MiB L3 cache, running 64-bit Linux
-under WSL2.  Node.js 24.18.0 executes the Wasm modules; the artifacts were
-produced with Rust 1.96.1 and wasm-pack 0.15.0.  Although the host has multiple
-cores, each engine search is single-threaded.  Results therefore describe this
-Node/V8 environment and must not be generalized to all browsers or machines.
-
-The bundled benchmark defines four FENs: the initial position, a tactical
-position with castling rights and contact in the center, a representative
-middlegame, and a rook-and-pawn endgame.  Each sample creates a fresh engine so
-that an earlier position or MultiPV configuration cannot warm the TT.  The
-stop-flag path matches a cross-origin-isolated browser.
-
-For throughput, both baseline and \code{+simd128} artifacts search iterative
-depths one through nine.  Each position is warmed twice and measured seven
-times.  The harness alternates artifact order by repetition to reduce drift.
-Node counts, best moves, and final scores must be deterministic; the reported
-rate is cumulative nodes divided by the median wall time.  The graph uses
-single-PV rows.  MultiPV=3 is retained as a cost check.
-
-For budget behavior, the baseline artifact searches at nominal limits of 100,
-500, and 1000 ms.  Three independent repetitions are summarized by median
-wall time and completed depth.  The worker may stop before the limit when its
-soft-time and EBF tests predict that the next iteration will not fit.  It may
-also spend the limit on an incomplete next depth while reporting the previous
-complete result.  Accordingly, the experiment measures achieved depth, not an
-assumption that every sample consumes exactly its nominal budget.
-
-Binary measurements use the exact module bytes, gzip, and Brotli quality 11.
-Initial and peak linear memory are read from the instantiated Wasm memory.  The
-Rust test suite is executed separately in an unoptimized native test profile.
-The CSV files used by the plots are shipped with the paper, and the PDF is
-generated directly from them using PGFPlots.
-
-\section{Results}
+\subsection{Fixed-depth throughput and SIMD}
+\label{sec:multipv}
 
 \begin{figure}[t]
 \centering
 \begin{tikzpicture}
 \begin{axis}[
   width=\columnwidth,
-  height=0.72\columnwidth,
+  height=0.68\columnwidth,
   ybar,
   bar width=6pt,
   ymin=0,
@@ -570,38 +530,32 @@ generated directly from them using PGFPlots.
 \legend{Baseline,SIMD}
 \end{axis}
 \end{tikzpicture}
-\caption{Fixed-depth-9 single-PV throughput.  Bars use seven samples after two
-warmups.  Equal node counts make each pair a direct timing comparison.}
+\caption{Fixed-depth-9 single-PV throughput, seven samples after two warmups.
+Equal node counts make each pair a direct timing comparison.}
 \label{fig:throughput}
 \end{figure}
 
-\Cref{fig:throughput} shows substantial position dependence.  Baseline median
-throughput ranges from 2.17 million nodes/s in the tactical position to 3.67
-million in the endgame.  The likely cause is work per node: sliding attacks,
-move count, pruning eligibility, and cache reuse differ across positions.
-Nodes/s is therefore a property of a workload, not a machine constant.
+\Cref{fig:throughput} shows substantial position dependence: baseline median
+throughput ranges from 2.17 million nodes/s (tactical) to 3.67 million
+(endgame), reflecting differing work per node across positions rather than a
+fixed machine rate. SIMD's effect is small and mixed --- $-0.79\%$,
+$+0.49\%$, $-1.95\%$, $+3.35\%$ across the four positions, geometric mean
+$+0.26\%$ --- with identical cumulative nodes, best move, and score in every
+pair, isolating code-generation speed from search divergence. This is why
+\cref{sec:delivery} reports SIMD's near-zero size cost and near-zero speed
+benefit as two separate facts rather than one recommendation.
 
-SIMD produces small, mixed changes: $-0.79\%$ at the start, $+0.49\%$ in the
-tactical position, $-1.95\%$ in the middlegame, and $+3.35\%$ in the endgame.
-The geometric mean over the four single-PV rows is $+0.26\%$.  Every pair has
-identical cumulative nodes, best move, and score, isolating code-generation
-speed rather than search divergence.  On this platform the evidence supports
-shipping a feature-gated variant at low size cost, but not describing SIMD as
-uniformly faster.
-
-MultiPV illustrates a different cost dimension.  At depth nine, baseline
-cumulative nodes rise from 44,335 to 122,770 at the start, 66,098 to 272,613 in
-the tactical position, 111,328 to 306,474 in the middlegame, and 29,990 to
-92,973 in the endgame.  Three lines cost between 2.77 and 4.12 times the
-single-PV work in this small suite.  Isolating background analysis in its own
-worker is consequently important even when one search is individually fast.
+At depth nine, MultiPV=3 costs 2.8--4.1$\times$ single-PV's node count across
+the four positions (44,335$\to$122,770 at the start; 111,328$\to$306,474 in
+the middlegame), which is the cost \cref{sec:latency}'s worker isolation
+exists to keep off the move budget.
 
 \begin{figure}[t]
 \centering
 \begin{tikzpicture}
 \begin{axis}[
   width=\columnwidth,
-  height=0.72\columnwidth,
+  height=0.68\columnwidth,
   xlabel={Nominal move budget (ms)},
   ylabel={Completed depth (plies)},
   xmin=70,xmax=1030,
@@ -625,291 +579,194 @@ worker is consequently important even when one search is individually fast.
 \legend{Start,Tactical,Middlegame,Endgame}
 \end{axis}
 \end{tikzpicture}
-\caption{Completed single-PV depth under nominal move budgets.  Values are
-medians of three fresh-engine samples; early stopping and timed-out next
-iterations are part of the measured policy.}
+\caption{Completed single-PV depth under nominal move budgets, medians of
+three fresh-engine samples. A larger budget need not raise completed depth:
+the engine can spend it starting (and timing out in) a deeper iteration
+while still returning the last complete result.}
 \label{fig:timed-depth}
 \end{figure}
 
-\Cref{fig:timed-depth} reflects both branching and time management.  The
-endgame reaches depth 13 at 100 ms and depth 21 at 1000 ms, while the other
-positions reach depths 10--11 and 14, respectively.  The start and tactical
-rows report depth 14 at both 500 and 1000 ms.  In those samples the larger
-budget was spent attempting a deeper iteration that did not complete; the
-last fully searched line remained depth 14.  This behavior is intentional:
-publishing a partial tree as a completed depth would make depth and score
-misleading.  The engine can return a sound partially searched root line for a
-timed-out single-PV iteration, but labels it separately and does not substitute
-it for the completed-depth benchmark field.
+\subsection{Playing strength as a function of move budget}
+\label{sec:strength-budget}
+
+A native engine's Elo is reported against a fixed time control because that
+is the deployment condition. A browser engine has no single deployment
+condition --- the UI's move-time slider ranges 100--10{,}000\,ms --- so
+reporting one Elo number the way a native-engine paper would is itself
+misleading: it silently picks one point on a curve and presents it as the
+whole answer. \Cref{fig:elo-budget} instead measures \engine{} against
+Stockfish 18 Lite \citep{stockfish2026,stockfishjs2026} (the same
+single-threaded Wasm build bundled in the web app) at equal per-move time, sweeping \engine's move budget against a fixed
+calibrated \code{UCI\_Elo} tier, with every opponent move drawn from a fresh
+UCI \code{go movetime} search at the identical budget. Games use
+color-swapped balanced openings with score/draw-streak adjudication
+identical in structure to this project's self-play harness
+(\code{engine/selfplay.mjs}); sample sizes are small by necessity (a handful
+of opening pairs per cell, run against a real Stockfish process rather than
+a second lightweight Wasm engine), so this is reported as a directional
+trend with labelled budgets, not a tight interval.
+\Cref{tab:elo-tier} additionally holds \engine's budget fixed at 3{,}000\,ms
+and raises the opponent tier toward Stockfish's calibrated \code{UCI\_Elo}
+ceiling (3190), to test directly whether more thinking time closes the gap
+against a near-maximum calibrated opponent rather than only a fixed one.
+
+The result does not confirm the naive expectation that more time
+monotonically buys \engine{} more relative strength. Against the fixed
+SF\,2400 tier (\cref{fig:elo-budget}), \engine{} scores 66.7\% at 100, 500,
+and 1{,}000\,ms alike, then drops to an even 50\% at 3{,}000\,ms; against
+rising tiers at a fixed 3{,}000\,ms budget (\cref{tab:elo-tier}), it beats
+SF\,2400 (62.5\%), loses to SF\,2800 (37.5\%), and draws every one of four
+games against SF\,3190. A plausible mechanism: \code{UCI\_LimitStrength} caps
+Stockfish's move selection, not its search depth, so a longer shared budget
+lets Stockfish's own search converge onto stronger moves under the same noise
+layer, narrowing rather than widening \engine's edge. The all-draw SF\,3190
+cell is also consistent with adjudication triggering on solid play from both
+sides at long budgets rather than with \engine{} matching Stockfish's
+near-maximum tier. With four to six games per cell this is a directional
+signal, not a tight interval (\cref{sec:limitations}). What it does support:
+at the 100--1{,}000\,ms budgets the UI offers by default, \engine{} outperforms
+a calibrated SF\,2400 opponent, and at no tested budget did it reliably beat a
+calibrated tier above 2400.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=\columnwidth,
+  height=0.66\columnwidth,
+  xlabel={\engine{} move budget (ms), log scale},
+  ylabel={Performance rating vs.\ SF 2400},
+  xmode=log,
+  log basis x={10},
+  xtick={100,500,1000,3000},
+  xticklabels={100,500,1000,3000},
+  tick label style={font=\scriptsize},
+  label style={font=\scriptsize},
+  grid=major,
+  grid style={draw=gray!18},
+]
+\addplot+[mark=*,thick,color=mojoblue]
+  table[x=budget_ms,y=perf_elo,col sep=comma]
+  {data/elo-vs-budget-budget.csv};
+\end{axis}
+\end{tikzpicture}
+\caption{\engine's performance rating against a fixed Stockfish 18 Lite
+\code{UCI\_Elo}\,2400 tier, as a function of \engine's own move budget (both
+engines search at the same per-move time). \Cref{tab:elo-tier} instead fixes
+the budget and raises the opponent tier.}
+\label{fig:elo-budget}
+\end{figure}
 
 \begin{table}[t]
 \centering
 \small
-\caption{Wasm artifact and memory measurements.  MiB values use $2^{20}$
-bytes.}
-\label{tab:artifacts}
-\begin{tabular}{@{}lrr@{}}
-\toprule
-Metric & Baseline & SIMD \\
-\midrule
-Raw module (bytes) & 1,456,876 & 1,459,636 \\
-gzip (bytes) & 223,268 & 223,553 \\
-Brotli-11 (bytes) & 132,934 & 133,266 \\
-Initial memory (MiB) & 2.56 & 2.56 \\
-Peak memory (MiB) & 19.69 & 19.69 \\
-\bottomrule
-\end{tabular}
+\caption{\engine{} at a fixed 3{,}000\,ms move budget against rising
+Stockfish \code{UCI\_Elo} tiers, up to Stockfish's calibrated ceiling.}
+\label{tab:elo-tier}
+\pgfplotstabletypeset[
+  col sep=comma,
+  columns={sf_elo,games,score_pct,perf_elo},
+  columns/sf_elo/.style={column type=r, string type, column name={SF \code{UCI\_Elo}}},
+  columns/games/.style={column type=r, string type, column name={Games}},
+  columns/score_pct/.style={column type=r, string type, column name={Score (\%)}},
+  columns/perf_elo/.style={column type=r, string type, column name={Perf.\ rating}},
+  every head row/.style={before row=\toprule, after row=\midrule},
+  every last row/.style={after row=\bottomrule},
+]{data/elo-vs-budget-tier.csv}
 \end{table}
 
-Both gzip sizes in \Cref{tab:artifacts} are below the 250,000-byte ceiling.
-The SIMD module adds 2,760 raw bytes but only 285 gzip bytes.  Peak linear
-memory is dominated by the 16-MiB TT plus ordering, correction, pawn-cache,
-board, and Wasm runtime storage.  Important fixed structures include a 288-KiB
-continuation-history table, a 192-KiB correction history, a 128-KiB pawn cache,
-a 24-KiB KPK bitbase, a 9-KiB capture history, and a 2-KiB LMR table.  These
-sizes are asserted in tests where layout is part of the design.
+\subsection{Regression test suite}
 
-The native Rust suite passes 75 tests.  Coverage includes standard perft
-positions, legal PVs, forced mate, repetition and fifty-move draws, incremental
-evaluation agreement, KPK normalization, SEE thresholds, TT collision and
-mate-score behavior, every move-picker stage, pruning guards, timeout
-semantics, clock calibration, MultiPV distinctness, and memory footprints.
-Tests cannot establish playing strength, but they protect invariants that
-selective search could otherwise violate silently.
+The native Rust suite has 83 \code{\#[test]} functions covering perft positions, legal PVs, forced
+mate, repetition and fifty-move draws, incremental evaluation agreement, KPK
+normalization, SEE thresholds, TT collision and mate-score behavior, every
+move-picker stage, pruning guards, timeout semantics, clock calibration,
+MultiPV distinctness, and memory-layout assertions on the fixed-size
+structures in \cref{tab:artifacts}. Tests cannot establish playing strength,
+but they protect the invariants \cref{sec:latency,sec:reuse} depend on ---
+in particular, that a real cancellation never surfaces a partial line, and
+that a stale request watermark never stops a live one --- which selective
+search and concurrent cancellation could otherwise violate silently.
 
-\section{Comparison with Stockfish 18}
+\section{Backend-Free Regression Testing in the Page}
+\label{sec:comparison}
 
-\begin{table*}[t]
-\centering
-\small
-\caption{Systematic comparison between \engine{} and Stockfish 18 (including Stockfish.js).}
-\label{tab:stockfish-comparison}
-\begin{tabularx}{\textwidth}{@{}p{0.18\textwidth}p{0.39\textwidth}X@{}}
-\toprule
-Dimension & \engine{} & Stockfish 18 (Stockfish.js) \\
-\midrule
-Primary Goal & Lightweight, instant-load browser engine with bounded per-move latency & Maximal tournament playing strength and deep analytical depth \\
-Implementation & Safe Rust (\code{\#![forbid(unsafe\_code)]}), \code{wasm-pack} & C++20, Emscripten \\
-Evaluation & Handcrafted tapered evaluation (HCE), 887 Texel-tuned weights, pawn cache, KPK bitbase, correction history & Efficiently Updatable Neural Network (NNUE), dual/large network architectures \\
-Delivery Size & $<250$~kB gzip (223~kB gzip, 133~kB Brotli, 1.46~MB raw) & Multi-megabyte lite WASM bundle; 30--70+~MB for full embedded NNUE models \\
-Runtime Memory & $\approx 20$~MiB peak ($2^{20}$-entry 16-MiB TT, caches, history) & Tens to hundreds of MiB (large TT, neural net buffers, SMP overhead) \\
-Concurrency & Single-threaded per worker; isolated move/analysis workers & Multi-threaded Lazy SMP across available CPU cores \\
-Cancellation & Adaptively polled \code{SharedArrayBuffer} atomic flag & Asynchronous UCI \code{stop} command over Web Worker messaging \\
-Host Interface & Direct typed Wasm-bindgen interface & Standard UCI text protocol (\code{stdin}/\code{stdout}) \\
-Strength Profile & Single optimized fast-search profile & Configurable rating emulation via \code{UCI\_Elo} (1320--3190) and unconstrained master strength ($>3600$) \\
-\bottomrule
-\end{tabularx}
-\end{table*}
+There is no server behind this project, which means there is nowhere to run
+a regression match except the same static page the product ships as. The
+comparison lab (\code{web/src/comparison/}, reachable at \code{\#/compare})
+solves this by treating \emph{git history itself} as the engine-version
+catalog: a build script (\code{prepare-engine-versions.mjs}) walks every
+commit that touched the compiled Wasm artifact, extracts each historical
+\code{mojo\_engine\_bg.wasm} and its glue module directly from git object
+storage, and screens each one against a fixed set of required export
+fragments (\code{export class Engine}, \code{analyze\_depth(}, \dots) so an
+incompatible ABI from an old commit is silently excluded rather than
+crashing the page that loads it. The result is served as a static JSON
+manifest --- no server-side build matrix, no artifact registry, just
+commits the repository already has.
 
-To contextualize \engine{} within the modern chess-engine landscape, this
-section compares its architecture, evaluation model, search selectivity, and
-runtime constraints with Stockfish 18 \citep{stockfish2026}, the premier
-open-source tournament engine, and its WebAssembly port Stockfish.js
-\citep{stockfishjs2026}.  In the accompanying application, Stockfish 18 is
-bundled as a configurable opponent and reference rather than a direct peer
-competitor.  The two engines occupy fundamentally different points in the
-design space, as summarized in \cref{tab:stockfish-comparison}.
+The page itself plays any two catalog versions against each other: workers
+equal to $\min(4, \text{cores}-1)$ load one engine build apiece, play
+color-swapped balanced opening pairs, and adjudicate identically to the
+offline self-play harness. What is unusual is that the SPRT itself runs
+client-side: \code{match.ts} bins completed opening pairs into a pentanomial
+distribution and accumulates a log-likelihood ratio against $\mathrm{H}_0{:}\allowbreak+0$
+and $\mathrm{H}_1{:}\allowbreak+10$ Elo \citep{wald1945sprt}, the same test this project's
+offline SPRT gate uses to accept search-tuning candidates, but computed
+entirely in a page a visitor is looking at, with no backend to compute it for
+them. A visitor can compare, say, last month's search-tuning candidate
+against the version currently deployed and read the same statistical
+decision this project's own CI pipeline would have made, without installing
+anything.
 
-\subsection{Design objectives and resource budget}
-
-Stockfish 18 is engineered for maximal playing strength in competitive
-tournament play and deep analytical search.  Its optimization objective is
-unconstrained by network delivery size, relying on multi-megabyte neural network
-weights, large dynamic memory allocations, and multi-threaded SMP scaling
-across physical CPU cores.  In contrast, \engine{} is engineered to operate
-under strict browser delivery constraints.  Its primary requirements are:
-\begin{enumerate}[label=(\roman*)]
-  \item a hard gzip payload ceiling under 250~kB (223~kB actual), enabling
-  sub-second client-side delivery without external asset downloads;
-  \item instantaneous startup with zero network weight transfers;
-  \item deterministic, low-latency search within short interactive budgets
-  (100--1000~ms); and
-  \item strict memory and search isolation across dedicated Web Workers.
-\end{enumerate}
-
-\subsection{Evaluation paradigm: HCE vs. NNUE}
-
-The most significant architectural divergence lies in position evaluation.
-Stockfish 18 utilizes an Efficiently Updatable Neural Network (NNUE) architecture
-\citep{nasu2018nnue}, employing dual large/small networks or deeply quantized
-accumulators trained over millions of self-play positions.  While NNUE delivers
-unmatched positional and tactical accuracy, evaluation inference is the dominant
-computational cost per node, heavily utilizing SIMD vector intrinsics and
-requiring megabytes of pre-trained parameters.
-
-\engine{} deliberately retains a classical handcrafted evaluation (HCE) model.
-Its tapered midgame/endgame terms, 887 parameters fitted via logistic regression
-(Texel tuning), 128-KiB pawn cache, dynamic king-danger tables, and generated
-24-KiB KPK retrograde bitbase incur zero external network or asset dependencies.
-Static evaluation in \engine{} is purely bitboard arithmetic, leaving the vast
-majority of CPU cycles available for fast alpha--beta tree traversal.  Online
-correction tables (192~KiB) dynamically compensate for systematic residual
-evaluation error during search without expanding the static feature footprint.
-
-\subsection{Search selectivity and concurrency}
-
-Both engines employ iterative-deepening Principal Variation Search (PVS) with
-aspiration windows, transposition tables, quiescence search, null-move pruning,
-late move reductions (LMR), and singular extensions.  However, their pruning and
-concurrency strategies reflect their target hardware:
-\begin{itemize}
-  \item \textbf{Selectivity Depth}: Stockfish 18 applies aggressive, highly
-  tuned pruning cascades (e.g., multi-history heuristics at 1/2/4/6 plies,
-  multi-cut, dynamic double/triple singular extensions, and complex non-linear
-  reduction curves) tuned through massive distributed self-play on Fishtest.
-  \engine{} enforces bounded, guarded heuristics (such as a strict two-ply
-  extension budget, material/halfmove null-move guards, and conservative LMR
-  tables; \cref{tab:selectivity}) to avoid search instability and horizon blunders
-  under short single-threaded time controls.
-  \item \textbf{Threading and Concurrency}: Stockfish natively relies on Lazy
-  SMP to scale search across dozens of threads.  \engine{} implements a
-  single-threaded search kernel per worker, allocating separate Web Workers for
-  move generation and background MultiPV analysis.  This guarantees that user
-  interactions remain responsive and move search latency remains strictly
-  bounded regardless of background analysis queueing.
-\end{itemize}
-
-\subsection{Web runtime and systems integration}
-
-In the browser runtime, Stockfish 18 (Stockfish.js) is compiled from C++20 via
-Emscripten and controlled asynchronously through the standard Universal Chess
-Interface (UCI) text protocol over worker \code{postMessage} channels.  Configurable
-play is achieved by throttling strength via \code{UCI\_LimitStrength} and
-\code{UCI\_Elo} (clamped between 1320 and 3190 in the application) by
-introducing intentional search noise and time reductions.
-
-In contrast, \engine{} is written in safe Rust (\code{\#![forbid(unsafe\_code)]})
-and compiled directly to Wasm via \code{wasm-pack}.  Rather than parsing textual UCI
-streams on the hot path, its JS-to-Wasm bridge passes structured typed data.  For
-cancellation, \engine{} employs a \code{SharedArrayBuffer}-backed atomic stop flag
-polled adaptively during search, achieving immediate preemption without terminating
-or reinitializing the worker context.
-
-\subsection{Empirical performance and relative Elo}
-
-\begin{table}[t]
-\centering
-\small
-\caption{Single-threaded Wasm throughput and search depth comparison between \engine{} and Stockfish 18 Lite under Node.js.}
-\label{tab:sf-throughput}
-\begin{tabular}{@{}lrrrr@{}}
-\toprule
-Position & \multicolumn{2}{c}{Depth-9 Nodes/s} & \multicolumn{2}{c}{500-ms Depth} \\
-\cmidrule(lr){2-3} \cmidrule(lr){4-5}
-& \engine{} & SF18 & \engine{} & SF18 \\
-\midrule
-Start & 893,784 & 359,384 & 13 & 19 \\
-Tactical & 1,123,105 & 921,272 & 12 & 18 \\
-Middlegame & 1,416,233 & 708,000 & 12 & 20 \\
-Endgame & 2,084,637 & 930,333 & 18 & 14 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{table}[t]
-\centering
-\small
-\caption{Head-to-head match results of \engine{} against calibrated Stockfish 18 Elo tiers across balanced opening pairs.}
-\label{tab:sf-elo}
-\begin{tabular}{@{}rrrrrr@{}}
-\toprule
-SF Elo & Games & W--D--L & Score & $\Delta$Elo & \engine{} Perf. \\
-\midrule
-1600 & 20 & 19--1--0 & 97.5\% & $+636$ & 2236 \\
-1800 & 20 & 20--0--0 & 100.0\% & $+798$ & 2598 \\
-2000 & 20 & 18--1--1 & 92.5\% & $+436$ & 2436 \\
-2200 & 20 & 15--5--0 & 87.5\% & $+338$ & 2538 \\
-2400 & 20 & 12--5--3 & 72.5\% & $+168$ & 2568 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-To quantify the runtime performance trade-offs, \Cref{tab:sf-throughput} reports
-single-threaded WebAssembly throughput and achieved search depths across the four
-standard benchmark positions on the Intel Core Ultra 5 235 test host under Node.js.
-At fixed depth nine, \engine{} delivers $1.22\times$ to $2.49\times$ higher node
-throughput (geometric mean $1.91\times$) than Stockfish 18 Lite WASM.  This
-throughput advantage stems directly from evaluation complexity: \engine's
-handcrafted bitboard arithmetic evaluates in nanoseconds, whereas Stockfish's
-embedded NNUE network evaluates quantized neural layers at non-terminal nodes.
-
-Conversely, under a fixed 500-ms time control, Stockfish 18 attains greater
-nominal search depth in middlegame positions (depths 18--20 vs.\ 12--13 for
-\engine{}) because its neural evaluation enables substantially more aggressive
-speculative pruning and larger late-move reductions without sacrificing tactical
-soundness.  In the endgame, \engine's low per-node overhead and dedicated KPK
-bitbase allow it to achieve depth 18 compared to Stockfish's depth 14.
-
-To evaluate playing strength relative to a standardized scale, \engine{} was
-matched against Stockfish 18 across 100 games (20 games per tier using 10
-color-swapped opening pairs from the balanced suite) with Stockfish's
-\code{UCI\_LimitStrength} calibrated from 1600 to 2400 Elo.  As shown in
-\Cref{tab:sf-elo}, \engine{} decisively outperforms calibrated tiers up to 2000
-Elo ($>92\%$ score) and maintains a winning record against Elo 2200 (15--5--0,
-87.5\%) and Elo 2400 (12--5--3, 72.5\%).  Using the standard logistic Elo formula
-$\Delta\mathrm{Elo}=-400\log_{10}(1/S-1)$, \engine{} demonstrates a consistent
-empirical performance rating of $\approx 2500$--$2570$ Elo relative to
-Stockfish's calibrated rating scale under fast browser-style time controls.
-
-\balance
 \section{Discussion and Limitations}
+\label{sec:limitations}
 
-The implementation demonstrates that compactness and sophistication are not
-opposites.  Most search features are small control policies over shared data:
-the TT move feeds root order, PVS, singular tests, and quiescence; a null search
-can yield either a cutoff or an ordering threat; history affects ordering,
-pruning, and LMR.  This reuse keeps the binary small, but it also makes
-interactions difficult to reason about in isolation.  Guard-focused tests and
-fixed-depth determinism are therefore as important as tests of individual
-score formulas.
+Most of what makes \engine{} small and fast is reuse across the concerns this
+paper separated for exposition: the TT move feeds root order, PVS,
+singular tests, and quiescence; a PV seeded across workers only helps
+because the search and the cache agree on what a position \emph{is}
+(\cref{sec:reuse}); the same node-count clock check that keeps polling cheap
+(\cref{sec:latency}) is what makes cancellation latency small enough to
+report in milliseconds rather than iterations. That reuse is also why these
+mechanisms are difficult to evaluate in isolation --- \cref{tab:cancellation}
+needed genuine thread concurrency to measure honestly, and an
+otherwise-reasonable single-threaded harness would have reported numbers
+dominated entirely by artifacts of the harness rather than the mechanism.
 
-The evaluator makes a similar decomposition by update frequency.  Material,
-piece-square score, phase, and pawn key change incrementally with every move.
-Pawn relations are cached across boards with the same pawns.  Mobility, king
-safety, and tactical threats are recomputed because their occupancy-dependent
-attack sets change broadly.  This division avoids both a full evaluator at
-every node and a fragile attempt to update every dynamic relation.
-
-The benchmark has several limitations.  Four hand-selected positions do not
-represent the distribution of a game, and nodes have unequal cost.  Median
-timing on one Node/V8 build does not characterize Chrome, Firefox, Safari,
-mobile CPUs, thermal throttling, or native Rust.  The SIMD comparison measures
-two compiler artifacts but does not attribute changes to particular Wasm
-instructions.  The timed experiment has only three repetitions and reports
-completed integer depths, a coarse outcome.  No confidence intervals are
-claimed.
-
-Most importantly, throughput is not strength.  A pruning change can search
-fewer nodes and play worse; a richer evaluator can search fewer nodes per
-second and play better.  While \cref{tab:sf-elo} characterizes relative
-performance against Stockfish's calibrated rating scale, this paper avoids
-claiming a universal Elo rating because external tournament pools, diverse
-hardware architectures, and long-horizon time controls were not evaluated.  The
-repository's color-swapped SPRT process is suitable for accepting a candidate
-relative to a fixed baseline, not assigning an absolute tournament standing.
-
-Future evaluation should expand across broader multi-engine pools, diverse
-mobile and desktop browser runtimes, and long-time-control tournament fixtures.
-Search ablations would quantify each heuristic's node and strength contribution,
-though such experiments must retune interacting constants or explicitly
-acknowledge that they measure a perturbed configuration.  Hardware performance
-counters are not available in ordinary browser execution, so native profiling
-can complement, but not replace, deployed Wasm measurements.
+The strength measurements in \cref{sec:strength-budget} are the most
+constrained in this paper: small opening-pair counts against one Stockfish
+build, on one machine, is a trend, not a tournament result, and a
+performance rating against a \code{UCI\_LimitStrength} tier is not the same
+claim as a rating against unconstrained Stockfish. The throughput and
+cold-start numbers likewise describe one Node/V8 build under WSL2, not
+Chrome, Firefox, Safari, mobile CPUs, or thermal-throttled hardware. The
+cancellation-latency mechanism is platform-independent by construction (an
+\code{Atomics} watermark at a calibrated node-count interval), but its
+measured latency is not: a slower or more contended CPU changes how many
+nodes fit in the 1.5\,ms target, and therefore how promptly cancellation is
+observed. Future work should extend the budget sweep to a finer grid and more
+opening pairs, repeat the cold-start and cancellation measurements inside an
+actual browser, and check the comparison lab's client-side SPRT against the
+offline harness's decisions on the same historical candidates.
 
 \section{Conclusion}
 
-\engine{} integrates established computer-chess techniques into a constrained
-browser system.  Its search combines PVS, transposition reuse, staged ordering,
-quiescence, and guarded selectivity; its evaluator combines incremental
-tapered scores, cached pawn knowledge, dynamic attacks, learned correction,
-and an exact KPK exception.  Separate workers and atomic cancellation preserve
-interactive time semantics, while dual Wasm artifacts remain under a strict
-download limit.  Local measurements show deterministic fixed-depth behavior,
-position-dependent throughput, and high search efficiency relative to Stockfish
-18 Lite WASM ($1.91\times$ throughput, $\approx 2500$--$2570$ relative Elo).  The
-broader lesson is methodological: report search work, runtime, size, and
-strength as distinct quantities, and validate each with an experiment designed
-for that quantity.
+None of \engine's search or evaluation techniques are new to computer chess.
+What this paper described is what it took to run that inherited technique
+under constraints a native engine never faces at all: a per-move latency
+contract enforced across two memory-isolated Wasm instances and a monotone
+cancellation watermark rather than a boolean; a repetition-aware cache and
+explicit cross-worker PV replay standing in for the shared memory two
+threads would otherwise have; a 250,000-byte gzip ceiling that is the actual
+cause of the handcrafted evaluator, the init-time KPK bitbase, and the
+feature-gated opening book, not an afterthought applied to an
+already-decided design; and a regression lab that computes its own SPRT
+inside the same static page it is testing, because there is no server to do
+it elsewhere. The broader lesson is that ``chess engine'' and ``web chess
+engine'' are different design problems even when the search tree underneath
+is identical, and the second problem is the one this paper is actually
+about.
 
 \bibliographystyle{plainnat}
 \bibliography{references}

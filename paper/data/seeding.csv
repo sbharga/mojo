@@ -1,0 +1,13 @@
+position,analysis_depth,seeded_search_depth,seeded_entries,cold_nodes,warm_nodes,node_reduction_pct
+start,9,8,8,27012,49825,-84.46
+start,10,9,9,31094,56031,-80.20
+start,11,10,10,55786,42296,24.18
+tactical,9,8,8,12039,8947,25.68
+tactical,10,9,9,16468,22253,-35.13
+tactical,11,10,7,18030,63594,-252.71
+middlegame,9,8,8,44585,25413,43.00
+middlegame,10,9,9,168924,78719,53.40
+middlegame,11,10,10,113270,35963,68.25
+endgame,9,8,8,12949,3127,75.85
+endgame,10,9,9,33048,11369,65.60
+endgame,11,10,10,26988,25154,6.80
