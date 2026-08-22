@@ -1,4 +1,4 @@
-\begin{thebibliography}{20}
+\begin{thebibliography}{17}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{\texttt{#1}}
 \expandafter\ifx\csname urlstyle\endcsname\relax
@@ -80,13 +80,6 @@ Ernst~A. Heinz.
 \newblock \emph{ICCA Journal}, 21\penalty0 (2):\penalty0 75--83, 1998.
 \newblock \doi{10.3233/ICG-1998-21202}.
 
-\bibitem[Knuth and Moore(1975)]{knuth1975alphabeta}
-Donald~E. Knuth and Ronald~W. Moore.
-\newblock An analysis of alpha-beta pruning.
-\newblock \emph{Artificial Intelligence}, 6\penalty0 (4):\penalty0 293--326,
-  1975.
-\newblock \doi{10.1016/0004-3702(75)90019-3}.
-
 \bibitem[Marsland et~al.(1987)Marsland, Reinefeld, and
   Schaeffer]{marsland1987sss}
 T.~Anthony Marsland, Alexander Reinefeld, and Jonathan Schaeffer.
@@ -95,25 +88,12 @@ T.~Anthony Marsland, Alexander Reinefeld, and Jonathan Schaeffer.
   1987.
 \newblock URL \url{https://webdocs.cs.ualberta.ca/~tony/OldPapers/ai87.pdf}.
 
-\bibitem[Nasu(2018)]{nasu2018nnue}
-Yu~Nasu.
-\newblock {NNUE}: Efficiently updatable neural-network-based evaluation
-  functions for computer shogi.
-\newblock Computer Shogi Association, 2018.
-
 \bibitem[{sbharga}(2026)]{mojo2026software}
 {sbharga}.
 \newblock Mojo: A rust and {WebAssembly} chess engine.
-\newblock Software, revision aeb6b5b, 2026.
+\newblock Software, revision 19fd40e, 2026.
 \newblock URL \url{https://github.com/sbharga/mojo}.
-\newblock Accessed 2026-08-04.
-
-\bibitem[Shannon(1950)]{shannon1950chess}
-Claude~E. Shannon.
-\newblock Programming a computer for playing chess.
-\newblock \emph{The London, Edinburgh, and Dublin Philosophical Magazine and
-  Journal of Science}, 41\penalty0 (314):\penalty0 256--275, 1950.
-\newblock \doi{10.1080/14786445008521796}.
+\newblock Accessed 2026-08-21.
 
 \bibitem[Spall(1992)]{spall1992spsa}
 James~C. Spall.

@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.28 (TeX Live 2025/Debian) (preloaded format=pdflatex 2026.8.19)  21 AUG 2026 16:57
+This is pdfTeX, Version 3.141592653-2.6-1.40.28 (TeX Live 2025/Debian) (preloaded format=pdflatex 2026.8.19)  21 AUG 2026 18:14
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -862,8 +862,8 @@ Package cleveref Info: always capitalise cross-reference names on input line 78
 Package: balance 1999/02/23 4.3 (PWD)
 \oldvsize=\dimen318
 )
-Package hyperref Info: Option `colorlinks' set `true' on input line 38.
-LaTeX Font Info:    Trying to load font information for T1+lmr on input line 52
+Package hyperref Info: Option `colorlinks' set `true' on input line 40.
+LaTeX Font Info:    Trying to load font information for T1+lmr on input line 54
 .
 
 (/usr/share/texmf/tex/latex/lm/t1lmr.fd
@@ -876,24 +876,24 @@ File: l3backend-pdftex.def 2025-10-09 L3 backend support: PDF output (pdfTeX)
 (./mojo-engine.aux)
 \openout1 = `mojo-engine.aux'.
 
-LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 52.
-LaTeX Font Info:    ... okay on input line 52.
-LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 52.
-LaTeX Font Info:    ... okay on input line 52.
-LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 52.
-LaTeX Font Info:    ... okay on input line 52.
-LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 52.
-LaTeX Font Info:    ... okay on input line 52.
-LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 52.
-LaTeX Font Info:    ... okay on input line 52.
-LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 52.
-LaTeX Font Info:    ... okay on input line 52.
-LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 52.
-LaTeX Font Info:    ... okay on input line 52.
-LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 52.
-LaTeX Font Info:    ... okay on input line 52.
-LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 52.
-LaTeX Font Info:    ... okay on input line 52.
+LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
+LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
+LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
+LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
+LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
+LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
+LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
+LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
+LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 54.
+LaTeX Font Info:    ... okay on input line 54.
 
 *geometry* driver: auto-detecting
 *geometry* detected driver: pdftex
@@ -929,13 +929,13 @@ LaTeX Font Info:    ... okay on input line 52.
 * \@reversemarginfalse
 * (1in=72.27pt=25.4mm, 1cm=28.453pt)
 
-LaTeX Info: Redefining \microtypecontext on input line 52.
-Package microtype Info: Applying patch `item' on input line 52.
-Package microtype Info: Applying patch `toc' on input line 52.
-Package microtype Info: Applying patch `eqnum' on input line 52.
-Package microtype Info: Applying patch `footnote' on input line 52.
-Package microtype Info: Applying patch `verbatim' on input line 52.
-LaTeX Info: Redefining \microtypesetup on input line 52.
+LaTeX Info: Redefining \microtypecontext on input line 54.
+Package microtype Info: Applying patch `item' on input line 54.
+Package microtype Info: Applying patch `toc' on input line 54.
+Package microtype Info: Applying patch `eqnum' on input line 54.
+Package microtype Info: Applying patch `footnote' on input line 54.
+Package microtype Info: Applying patch `verbatim' on input line 54.
+LaTeX Info: Redefining \microtypesetup on input line 54.
 Package microtype Info: Generating PDF output.
 Package microtype Info: Character protrusion enabled (level 2).
 Package microtype Info: Using default protrusion set `alltext'.
@@ -975,42 +975,42 @@ e
 Package pgfplots notification 'compat/show suggested version=true': document ha
 s been generated with the most recent feature set (\pgfplotsset{compat=1.18}).
 
-Package hyperref Info: Link coloring ON on input line 52.
+Package hyperref Info: Link coloring ON on input line 54.
 (./mojo-engine.out) (./mojo-engine.out)
 \@outlinefile=\write4
 \openout4 = `mojo-engine.out'.
 
 LaTeX Font Info:    Trying to load font information for OT1+lmr on input line 5
-4.
+6.
 
 (/usr/share/texmf/tex/latex/lm/ot1lmr.fd
 File: ot1lmr.fd 2015/05/01 v1.6.1 Font defs for Latin Modern
 )
 LaTeX Font Info:    Trying to load font information for OML+lmm on input line 5
-4.
+6.
 
 (/usr/share/texmf/tex/latex/lm/omllmm.fd
 File: omllmm.fd 2015/05/01 v1.6.1 Font defs for Latin Modern
 )
 LaTeX Font Info:    Trying to load font information for OMS+lmsy on input line 
-54.
+56.
 
 (/usr/share/texmf/tex/latex/lm/omslmsy.fd
 File: omslmsy.fd 2015/05/01 v1.6.1 Font defs for Latin Modern
 )
 LaTeX Font Info:    Trying to load font information for OMX+lmex on input line 
-54.
+56.
 
 (/usr/share/texmf/tex/latex/lm/omxlmex.fd
 File: omxlmex.fd 2015/05/01 v1.6.1 Font defs for Latin Modern
 )
 LaTeX Font Info:    External font `lmex10' loaded for size
-(Font)              <12> on input line 54.
+(Font)              <12> on input line 56.
 LaTeX Font Info:    External font `lmex10' loaded for size
-(Font)              <8> on input line 54.
+(Font)              <8> on input line 56.
 LaTeX Font Info:    External font `lmex10' loaded for size
-(Font)              <6> on input line 54.
-LaTeX Font Info:    Trying to load font information for U+msa on input line 54.
+(Font)              <6> on input line 56.
+LaTeX Font Info:    Trying to load font information for U+msa on input line 56.
 
 
 (/usr/share/texlive/texmf-dist/tex/latex/amsfonts/umsa.fd
@@ -1019,7 +1019,7 @@ File: umsa.fd 2013/01/14 v3.01 AMS symbols A
 (/usr/share/texlive/texmf-dist/tex/latex/microtype/mt-msa.cfg
 File: mt-msa.cfg 2006/02/04 v1.1 microtype config. file: AMS symbols (a) (RS)
 )
-LaTeX Font Info:    Trying to load font information for U+msb on input line 54.
+LaTeX Font Info:    Trying to load font information for U+msb on input line 56.
 
 
 (/usr/share/texlive/texmf-dist/tex/latex/amsfonts/umsb.fd
@@ -1029,24 +1029,14 @@ File: umsb.fd 2013/01/14 v3.01 AMS symbols B
 File: mt-msb.cfg 2005/06/01 v1.0 microtype config. file: AMS symbols (b) (RS)
 )
 LaTeX Font Info:    External font `lmex10' loaded for size
-(Font)              <9> on input line 54.
+(Font)              <9> on input line 56.
 LaTeX Font Info:    External font `lmex10' loaded for size
-(Font)              <5> on input line 54.
+(Font)              <5> on input line 56.
 Package microtype Info: Character `029' is missing
 (microtype)             in font `T1/lmr/m/sc/10'.
 (microtype)             Ignoring protrusion settings for this character.
-LaTeX Font Info:    External font `lmex10' loaded for size
-(Font)              <10> on input line 124.
-LaTeX Font Info:    External font `lmex10' loaded for size
-(Font)              <7> on input line 124.
- [1{/var/lib/texmf/fonts/map/pdftex/updmap/pdftex.map}{/usr/share/texmf/fonts/e
-nc/dvips/lm/lm-ec.enc}
-
-
-{/usr/share/texmf/fonts/enc/dvips/lm/lm-mathit.enc}{/usr/share/texmf/fonts/enc/
-dvips/lm/lm-rm.enc}{/usr/share/texmf/fonts/enc/dvips/lm/lm-mathsy.enc}]
 LaTeX Font Info:    Trying to load font information for T1+lmtt on input line 1
-57.
+02.
 
 (/usr/share/texmf/tex/latex/lm/t1lmtt.fd
 File: t1lmtt.fd 2015/05/01 v1.6.1 Font defs for Latin Modern
@@ -1056,17 +1046,66 @@ Package microtype Info: Loading generic protrusion settings for font family
 (microtype)             For optimal results, create family-specific settings.
 (microtype)             See the microtype manual for details.
 
-Underfull \vbox (badness 10000) has occurred while \output is active []
 
- [2]
-Underfull \vbox (badness 10000) has occurred while \output is active []
+LaTeX Font Warning: Font shape `T1/lmr/bx/sc' undefined
+(Font)              using `T1/lmr/bx/n' instead on input line 124.
 
- [3]
-Underfull \vbox (badness 10000) has occurred while \output is active []
+[1{/var/lib/texmf/fonts/map/pdftex/updmap/pdftex.map}{/usr/share/texmf/fonts/en
+c/dvips/lm/lm-ec.enc}
 
- [4]
-[5{/usr/share/texmf/fonts/enc/dvips/lm/lm-mathex.enc}]
-Package pgfplots info on input line 563: Using 'lua backend=false' for axis: x 
+
+]
+Underfull \hbox (badness 10000) in paragraph at lines 163--163
+[]|\T1/lmr/m/n/9 (+20) Futility /
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 163--163
+[]|\T1/lmr/m/n/9 (+20) Late-move
+ []
+
+LaTeX Font Info:    External font `lmex10' loaded for size
+(Font)              <10> on input line 193.
+LaTeX Font Info:    External font `lmex10' loaded for size
+(Font)              <7> on input line 193.
+[2{/usr/share/texmf/fonts/enc/dvips/lm/lm-mathsy.enc}{/usr/share/texmf/fonts/en
+c/dvips/lm/lm-rm.enc}]
+Underfull \hbox (badness 4582) in paragraph at lines 273--273
+[]\T1/lmr/m/n/10 (+20) Table 2: []Cancellation la-tency: time from an
+ []
+
+PGFPlots: reading {data/cancellation.csv}
+
+Overfull \hbox (6.38531pt too wide) in paragraph at lines 284--285
+ [][] 
+ []
+
+
+Underfull \hbox (badness 2529) in paragraph at lines 312--325
+[]\T1/lmr/m/n/10 (+20) Inside one depth, the Rust node loop can-not
+ []
+
+[3{/usr/share/texmf/fonts/enc/dvips/lm/lm-mathit.enc}]
+PGFPlots: reading {data/seeding.csv}
+
+Underfull \hbox (badness 2150) in paragraph at lines 430--442
+\T1/lmr/m/n/10 (+20) load-ing ei-ther: a 29-byte SIMD val-i-da-tion mod-
+ []
+
+
+Underfull \hbox (badness 1215) in paragraph at lines 430--442
+\T1/lmr/m/n/10 (+20) ule is checked against \T1/lmtt/m/n/10 WebAssembly.validat
+e \T1/lmr/m/n/10 (+20) first
+ []
+
+[4]
+PGFPlots: reading {data/coldstart.csv}
+
+Overfull \hbox (9.33966pt too wide) in paragraph at lines 497--498
+ [][] 
+ []
+
+Package pgfplots info on input line 523: Using 'lua backend=false' for axis: x 
 coord trafo unsupported.
 PGFPlots: reading {data/fixed-depth.csv}
 PGFPlots: reading {data/fixed-depth.csv}
@@ -1074,91 +1113,49 @@ PGFPlots: reading {data/timed-depth.csv}
 PGFPlots: reading {data/timed-depth.csv}
 PGFPlots: reading {data/timed-depth.csv}
 PGFPlots: reading {data/timed-depth.csv}
- [6]
-Underfull \hbox (badness 10000) in paragraph at lines 701--701
-[]|\T1/lmr/m/n/9 (+20) Safe Rust (\T1/lmtt/m/n/9 #![forbid(unsafe_code)]\T1/lmr
-/m/n/9 (+20) ),
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 701--701
-[]|\T1/lmr/m/n/9 (+20) Single-threaded per worker; iso-lated
- []
-
-
-Underfull \hbox (badness 3713) in paragraph at lines 730--730
-[]\T1/lmr/bx/n/12 (+20) Evaluation paradigm: HCE vs.
- []
-
-LaTeX Font Info:    Trying to load font information for TS1+lmr on input line 7
-56.
-(/usr/share/texmf/tex/latex/lm/ts1lmr.fd
-File: ts1lmr.fd 2015/05/01 v1.6.1 Font defs for Latin Modern
-) [7{/usr/share/texmf/fonts/enc/dvips/lm/lm-ts1.enc}]
-Underfull \hbox (badness 7012) in paragraph at lines 781--787
-[]\T1/lmr/m/n/10 (+20) In con-trast, \T1/lmr/m/sc/10 (+20) Mojo \T1/lmr/m/n/10 
-(+20) is writ-ten in safe Rust
- []
-
-
-Underfull \vbox (badness 2343) has occurred while \output is active []
-
- [8]
-(./mojo-engine.bbl
-Underfull \hbox (badness 2035) in paragraph at lines 39--44
-\T1/lmr/m/n/10 (+20) the eval-u-a-tion of game po-si-tions.  \T1/lmr/m/it/10 (+
-20) Jour-nal of
- []
-
-
-Underfull \hbox (badness 1112) in paragraph at lines 39--44
-\T1/lmr/m/it/10 (+20) Ar-ti-fi-cial In-tel-li-gence Re-search\T1/lmr/m/n/10 (+2
-0) , 3:373--382, 1995a.
- []
-
-[9]
-Underfull \hbox (badness 2865) in paragraph at lines 92--97
-[]\T1/lmr/m/n/10 (+20) T. An-thony Mars-land, Alexan-der Reine-feld, and
- []
-
-
-Underfull \hbox (badness 1454) in paragraph at lines 127--131
-[]\T1/lmr/m/n/10 (+20) Stockfish De-vel-op-ers.  Stock-fish: A strong open-
- []
-
-) [10] (./mojo-engine.aux)
+[5]
+Package pgfplots info on input line 647: Using 'lua backend=false' for axis: xm
+ode=log unsupported (yet).
+PGFPlots: reading {data/elo-vs-budget-budget.csv}
+Package microtype Info: Character `029' is missing
+(microtype)             in font `T1/lmr/m/sc/7'.
+(microtype)             Ignoring protrusion settings for this character.
+PGFPlots: reading {data/elo-vs-budget-tier.csv}
+ [6] (./mojo-engine.bbl) [7] (./mojo-engine.aux)
  ***********
 LaTeX2e <2025-11-01>
 L3 programming layer <2026-01-19>
  ***********
+
+
+LaTeX Font Warning: Some font shapes were not available, defaults substituted.
+
 Package rerunfilecheck Info: File `mojo-engine.out' has not changed.
-(rerunfilecheck)             Checksum: D4B71EFE041B30BBC5346A7A205AC24B;4277.
+(rerunfilecheck)             Checksum: 7BEA292DE40F87ECF2F230B6322A38FA;4967.
  ) 
 Here is how much of TeX's memory you used:
- 38143 strings out of 469514
- 879167 string characters out of 5470072
- 1436682 words of memory out of 5000000
- 65890 multiletter control sequences out of 15000+600000
- 711142 words of font info for 212 fonts, out of 8000000 for 9000
+ 38175 strings out of 469514
+ 883535 string characters out of 5470072
+ 1437685 words of memory out of 5000000
+ 65921 multiletter control sequences out of 15000+600000
+ 715727 words of font info for 217 fonts, out of 8000000 for 9000
  14 hyphenation exceptions out of 8191
  102i,19n,107p,1001b,2332s stack positions out of 10000i,1000n,20000p,200000b,200000s
 </usr/share/texmf/fonts/type1/public/lm/lmbx10.pfb></usr/share/texmf/fonts/ty
 pe1/public/lm/lmbx12.pfb></usr/share/texmf/fonts/type1/public/lm/lmcsc10.pfb></
-usr/share/texmf/fonts/type1/public/lm/lmex10.pfb></usr/share/texmf/fonts/type1/
-public/lm/lmmi10.pfb></usr/share/texmf/fonts/type1/public/lm/lmmi7.pfb></usr/sh
-are/texmf/fonts/type1/public/lm/lmmi9.pfb></usr/share/texmf/fonts/type1/public/
-lm/lmr10.pfb></usr/share/texmf/fonts/type1/public/lm/lmr12.pfb></usr/share/texm
-f/fonts/type1/public/lm/lmr5.pfb></usr/share/texmf/fonts/type1/public/lm/lmr6.p
-fb></usr/share/texmf/fonts/type1/public/lm/lmr7.pfb></usr/share/texmf/fonts/typ
-e1/public/lm/lmr9.pfb></usr/share/texmf/fonts/type1/public/lm/lmri10.pfb></usr/
-share/texmf/fonts/type1/public/lm/lmsy10.pfb></usr/share/texmf/fonts/type1/publ
-ic/lm/lmsy7.pfb></usr/share/texmf/fonts/type1/public/lm/lmsy9.pfb></usr/share/t
-exmf/fonts/type1/public/lm/lmtt10.pfb></usr/share/texmf/fonts/type1/public/lm/l
-mtt9.pfb>
-Output written on mojo-engine.pdf (10 pages, 428336 bytes).
+usr/share/texmf/fonts/type1/public/lm/lmmi10.pfb></usr/share/texmf/fonts/type1/
+public/lm/lmmi7.pfb></usr/share/texmf/fonts/type1/public/lm/lmmi9.pfb></usr/sha
+re/texmf/fonts/type1/public/lm/lmr10.pfb></usr/share/texmf/fonts/type1/public/l
+m/lmr12.pfb></usr/share/texmf/fonts/type1/public/lm/lmr5.pfb></usr/share/texmf/
+fonts/type1/public/lm/lmr7.pfb></usr/share/texmf/fonts/type1/public/lm/lmr9.pfb
+></usr/share/texmf/fonts/type1/public/lm/lmri10.pfb></usr/share/texmf/fonts/typ
+e1/public/lm/lmri9.pfb></usr/share/texmf/fonts/type1/public/lm/lmsy10.pfb></usr
+/share/texmf/fonts/type1/public/lm/lmsy9.pfb></usr/share/texmf/fonts/type1/publ
+ic/lm/lmtt10.pfb></usr/share/texmf/fonts/type1/public/lm/lmtt9.pfb>
+Output written on mojo-engine.pdf (7 pages, 386819 bytes).
 PDF statistics:
- 404 PDF objects out of 1000 (max. 8388607)
- 346 compressed objects within 4 object streams
- 72 named destinations out of 1000 (max. 500000)
- 46277 words of extra memory for PDF output out of 51595 (max. 10000000)
+ 396 PDF objects out of 1000 (max. 8388607)
+ 327 compressed objects within 4 object streams
+ 58 named destinations out of 1000 (max. 500000)
+ 46261 words of extra memory for PDF output out of 51595 (max. 10000000)
 

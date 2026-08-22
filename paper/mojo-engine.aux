@@ -2,85 +2,96 @@
 \providecommand\hyper@newdestlabel[2]{}
 \providecommand\HyField@AuxAddToFields[1]{}
 \providecommand\HyField@AuxAddToCoFields[2]{}
-\citation{shannon1950chess}
+\citation{haas2017wasm}
 \citation{mojo2026software}
-\citation{knuth1975alphabeta}
 \citation{marsland1987sss}
-\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {2}Background and Related Work}{1}{section.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Game-tree search}{1}{subsection.2.1}\protected@file@percent }
-\newlabel{eq:negamax}{{1}{1}{Game-tree search}{equation.1}{}}
-\newlabel{eq:negamax@cref}{{[equation][1][]1}{[1][1][]1}{}{}{}}
+\citation{zobrist1970hashing}
+\citation{breuker1994tt}
 \citation{beal1990quiescence}
 \citation{donninger1993null}
 \citation{heinz1998futility}
 \citation{buro1995probcut}
 \citation{anantharaman1990singular}
-\citation{zobrist1970hashing}
-\citation{breuker1994tt}
+\citation{buro1995features}
+\citation{spall1992spsa}
+\citation{wald1945sprt}
+\citation{thompson1986retrograde}
 \citation{cozychess2026}
-\citation{buro1995features}
-\citation{spall1992spsa}
-\citation{wald1945sprt}
-\citation{thompson1986retrograde}
-\citation{haas2017wasm}
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Evaluation, tuning, and testing}{2}{subsection.2.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {3}System Architecture}{2}{section.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {4}Search Design}{2}{section.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Iterative deepening and root search}{2}{subsection.4.1}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces \textsc  {Mojo}{} execution architecture. The move and analysis workers own separate engine instances; the common-design box denotes shared implementation, not shared runtime state. The dashed arrow is an offline configuration path.}}{3}{figure.1}\protected@file@percent }
-\newlabel{fig:architecture}{{1}{3}{\engine {} execution architecture. The move and analysis workers own separate engine instances; the common-design box denotes shared implementation, not shared runtime state. The dashed arrow is an offline configuration path}{figure.1}{}}
-\newlabel{fig:architecture@cref}{{[figure][1][]1}{[1][2][]3}{}{}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Search control flow. The ordering is significant: cheap bound and static tests precede move construction, while reduced searches are verified when they can change alpha.}}{3}{figure.2}\protected@file@percent }
-\newlabel{fig:search-flow}{{2}{3}{Search control flow. The ordering is significant: cheap bound and static tests precede move construction, while reduced searches are verified when they can change alpha}{figure.2}{}}
-\newlabel{fig:search-flow@cref}{{[figure][2][]2}{[1][2][]3}{}{}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Transpositions, draws, and terminal scores}{3}{subsection.4.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Ordering and selective search}{3}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Background: What \textsc  {Mojo} Inherits}{1}{section.2}\protected@file@percent }
+\newlabel{sec:background}{{2}{1}{Background: What \texorpdfstring {\engine }{Mojo} Inherits}{section.2}{}}
+\newlabel{sec:background@cref}{{[section][2][]2}{[1][1][]1}{}{}{}}
 \citation{donninger1993null}
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Selective mechanisms in \textsc  {Mojo}{}. The safeguards are part of the algorithm: they constrain where a heuristic assumption may discard or reduce work.}}{4}{table.1}\protected@file@percent }
-\newlabel{tab:selectivity}{{1}{4}{Selective mechanisms in \engine {}. The safeguards are part of the algorithm: they constrain where a heuristic assumption may discard or reduce work}{table.1}{}}
-\newlabel{tab:selectivity@cref}{{[table][1][]1}{[1][3][]4}{}{}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {5}Evaluation and Learning}{4}{section.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Tapered handcrafted evaluation}{4}{subsection.5.1}\protected@file@percent }
-\newlabel{eq:taper}{{2}{4}{Tapered handcrafted evaluation}{equation.2}{}}
-\newlabel{eq:taper@cref}{{[equation][2][]2}{[1][4][]4}{}{}{}}
-\citation{thompson1986retrograde}
-\citation{buro1995features}
-\citation{spall1992spsa}
+\citation{heinz1998futility,buro1995probcut}
+\citation{anantharaman1990singular}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Selective-search mechanisms \textsc  {Mojo}{} inherits, compressed to their guard conditions; none of this cascade is original to \textsc  {Mojo}{}.}}{2}{table.1}\protected@file@percent }
+\newlabel{tab:selectivity}{{1}{2}{Selective-search mechanisms \engine {} inherits, compressed to their guard conditions; none of this cascade is original to \engine {}}{table.1}{}}
+\newlabel{tab:selectivity@cref}{{[table][1][]1}{[1][2][]2}{}{}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {3}Preserving a Per-Move Latency Contract}{2}{section.3}\protected@file@percent }
+\newlabel{sec:latency}{{3}{2}{Preserving a Per-Move Latency Contract}{section.3}{}}
+\newlabel{sec:latency@cref}{{[section][3][]3}{[1][2][]2}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}One engine cannot serve two searches}{2}{subsection.3.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces \textsc  {Mojo}{} execution architecture. Two isolated Engine instances share no memory: cancellation reaches both through a shared \texttt  {Atomics} watermark (\cref  {sec:cancel}), and a PV crosses from the analysis worker's TT to the move worker's TT only by explicit replay (\cref  {sec:reuse}), never by sharing state.}}{2}{figure.1}\protected@file@percent }
+\newlabel{fig:architecture}{{1}{2}{\engine {} execution architecture. Two isolated Engine instances share no memory: cancellation reaches both through a shared \code {Atomics} watermark (\cref {sec:cancel}), and a PV crosses from the analysis worker's TT to the move worker's TT only by explicit replay (\cref {sec:reuse}), never by sharing state}{figure.1}{}}
+\newlabel{fig:architecture@cref}{{[figure][1][]1}{[1][2][]2}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}A stale cancel must not kill a live search}{2}{subsection.3.2}\protected@file@percent }
+\newlabel{sec:cancel}{{3.2}{2}{A stale cancel must not kill a live search}{subsection.3.2}{}}
+\newlabel{sec:cancel@cref}{{[subsection][2][3]3.2}{[1][2][]2}{}{}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Cancellation latency: time from an \texttt  {Atomics.store} on the watermark, issued from a separate thread mid-search, to the search returning. 20 samples per budget; the store fires roughly a third of the way through the budget.}}{3}{table.2}\protected@file@percent }
+\newlabel{tab:cancellation}{{2}{3}{Cancellation latency: time from an \code {Atomics.store} on the watermark, issued from a separate thread mid-search, to the search returning. 20 samples per budget; the store fires roughly a third of the way through the budget}{table.2}{}}
+\newlabel{tab:cancellation@cref}{{[table][2][]2}{[1][3][]3}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Yielding between depths, and polling without going blind}{3}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Reusing Work Across a UI's Position Stream}{3}{section.4}\protected@file@percent }
+\newlabel{sec:reuse}{{4}{3}{Reusing Work Across a UI's Position Stream}{section.4}{}}
+\newlabel{sec:reuse@cref}{{[section][4][]4}{[1][3][]3}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}A cache keyed on more than the board}{3}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Seeding one worker's search from another's}{3}{subsection.4.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Cross-worker PV seeding: node count for a $(D{-}1)$-depth search of the position reached after the analysis worker's depth-$D$ PV first move, cold versus seeded from that PV's remainder.}}{4}{table.3}\protected@file@percent }
+\newlabel{tab:seeding}{{3}{4}{Cross-worker PV seeding: node count for a $(D{-}1)$-depth search of the position reached after the analysis worker's depth-$D$ PV first move, cold versus seeded from that PV's remainder}{table.3}{}}
+\newlabel{tab:seeding@cref}{{[table][3][]3}{[1][4][]4}{}{}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Delivering the Engine}{4}{section.5}\protected@file@percent }
+\newlabel{sec:delivery}{{5}{4}{Delivering the Engine}{section.5}{}}
+\newlabel{sec:delivery@cref}{{[section][5][]5}{[1][4][]4}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Handcrafted evaluation as a size decision}{4}{subsection.5.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Wasm artifact and memory measurements ($2^{20}$-byte MiB), current \texttt  {main} (\texttt  {19fd40e}).}}{4}{table.4}\protected@file@percent }
+\newlabel{tab:artifacts}{{4}{4}{Wasm artifact and memory measurements ($2^{20}$-byte MiB), current \code {main} (\code {19fd40e})}{table.4}{}}
+\newlabel{tab:artifacts@cref}{{[table][4][]4}{[1][4][]4}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Compute-at-init instead of ship-a-table}{4}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Picking an artifact before downloading either}{4}{subsection.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Evaluation}{4}{section.6}\protected@file@percent }
+\newlabel{sec:evaluation}{{6}{4}{Evaluation}{section.6}{}}
+\newlabel{sec:evaluation@cref}{{[section][6][]6}{[1][4][]4}{}{}{}}
+\citation{stockfish2026,stockfishjs2026}
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Cold start at a 100\,ms move budget, median of 15 samples.}}{5}{table.5}\protected@file@percent }
+\newlabel{tab:coldstart}{{5}{5}{Cold start at a 100\,ms move budget, median of 15 samples}{table.5}{}}
+\newlabel{tab:coldstart@cref}{{[table][5][]5}{[1][5][]5}{}{}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Fixed-depth-9 single-PV throughput, seven samples after two warmups. Equal node counts make each pair a direct timing comparison.}}{5}{figure.2}\protected@file@percent }
+\newlabel{fig:throughput}{{2}{5}{Fixed-depth-9 single-PV throughput, seven samples after two warmups. Equal node counts make each pair a direct timing comparison}{figure.2}{}}
+\newlabel{fig:throughput@cref}{{[figure][2][]2}{[1][5][]5}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Cold start: the number a browser session actually waits on}{5}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Fixed-depth throughput and SIMD}{5}{subsection.6.2}\protected@file@percent }
+\newlabel{sec:multipv}{{6.2}{5}{Fixed-depth throughput and SIMD}{subsection.6.2}{}}
+\newlabel{sec:multipv@cref}{{[subsection][2][6]6.2}{[1][5][]5}{}{}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Completed single-PV depth under nominal move budgets, medians of three fresh-engine samples. A larger budget need not raise completed depth: the engine can spend it starting (and timing out in) a deeper iteration while still returning the last complete result.}}{5}{figure.3}\protected@file@percent }
+\newlabel{fig:timed-depth}{{3}{5}{Completed single-PV depth under nominal move budgets, medians of three fresh-engine samples. A larger budget need not raise completed depth: the engine can spend it starting (and timing out in) a deeper iteration while still returning the last complete result}{figure.3}{}}
+\newlabel{fig:timed-depth@cref}{{[figure][3][]3}{[1][5][]5}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Playing strength as a function of move budget}{5}{subsection.6.3}\protected@file@percent }
+\newlabel{sec:strength-budget}{{6.3}{5}{Playing strength as a function of move budget}{subsection.6.3}{}}
+\newlabel{sec:strength-budget@cref}{{[subsection][3][6]6.3}{[1][5][]5}{}{}{}}
 \citation{wald1945sprt}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Correction history}{5}{subsection.5.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Offline parameter fitting}{5}{subsection.5.3}\protected@file@percent }
-\newlabel{eq:logistic}{{3}{5}{Offline parameter fitting}{equation.3}{}}
-\newlabel{eq:logistic@cref}{{[equation][3][]3}{[1][5][]5}{}{}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {6}Experimental Method}{5}{section.6}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Fixed-depth-9 single-PV throughput. Bars use seven samples after two warmups. Equal node counts make each pair a direct timing comparison.}}{6}{figure.3}\protected@file@percent }
-\newlabel{fig:throughput}{{3}{6}{Fixed-depth-9 single-PV throughput. Bars use seven samples after two warmups. Equal node counts make each pair a direct timing comparison}{figure.3}{}}
-\newlabel{fig:throughput@cref}{{[figure][3][]3}{[1][6][]6}{}{}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {7}Results}{6}{section.7}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Completed single-PV depth under nominal move budgets. Values are medians of three fresh-engine samples; early stopping and timed-out next iterations are part of the measured policy.}}{6}{figure.4}\protected@file@percent }
-\newlabel{fig:timed-depth}{{4}{6}{Completed single-PV depth under nominal move budgets. Values are medians of three fresh-engine samples; early stopping and timed-out next iterations are part of the measured policy}{figure.4}{}}
-\newlabel{fig:timed-depth@cref}{{[figure][4][]4}{[1][6][]6}{}{}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Wasm artifact and memory measurements. MiB values use $2^{20}$ bytes.}}{6}{table.2}\protected@file@percent }
-\newlabel{tab:artifacts}{{2}{6}{Wasm artifact and memory measurements. MiB values use $2^{20}$ bytes}{table.2}{}}
-\newlabel{tab:artifacts@cref}{{[table][2][]2}{[1][6][]6}{}{}{}}
-\citation{stockfish2026}
-\citation{stockfishjs2026}
-\citation{nasu2018nnue}
-\@writefile{toc}{\contentsline {section}{\numberline {8}Comparison with Stockfish 18}{7}{section.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}Design objectives and resource budget}{7}{subsection.8.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Evaluation paradigm: HCE vs. NNUE}{7}{subsection.8.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}Search selectivity and concurrency}{7}{subsection.8.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.4}Web runtime and systems integration}{7}{subsection.8.4}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Systematic comparison between \textsc  {Mojo}{} and Stockfish 18 (including Stockfish.js).}}{8}{table.3}\protected@file@percent }
-\newlabel{tab:stockfish-comparison}{{3}{8}{Systematic comparison between \engine {} and Stockfish 18 (including Stockfish.js)}{table.3}{}}
-\newlabel{tab:stockfish-comparison@cref}{{[table][3][]3}{[1][7][]8}{}{}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Single-threaded Wasm throughput and search depth comparison between \textsc  {Mojo}{} and Stockfish 18 Lite under Node.js.}}{8}{table.4}\protected@file@percent }
-\newlabel{tab:sf-throughput}{{4}{8}{Single-threaded Wasm throughput and search depth comparison between \engine {} and Stockfish 18 Lite under Node.js}{table.4}{}}
-\newlabel{tab:sf-throughput@cref}{{[table][4][]4}{[1][8][]8}{}{}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.5}Empirical performance and relative Elo}{8}{subsection.8.5}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Head-to-head match results of \textsc  {Mojo}{} against calibrated Stockfish 18 Elo tiers across balanced opening pairs.}}{8}{table.5}\protected@file@percent }
-\newlabel{tab:sf-elo}{{5}{8}{Head-to-head match results of \engine {} against calibrated Stockfish 18 Elo tiers across balanced opening pairs}{table.5}{}}
-\newlabel{tab:sf-elo@cref}{{[table][5][]5}{[1][8][]8}{}{}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces \textsc  {Mojo}'s performance rating against a fixed Stockfish 18 Lite \texttt  {UCI\_Elo}\,2400 tier, as a function of \textsc  {Mojo}'s own move budget (both engines search at the same per-move time). \Cref  {tab:elo-tier} instead fixes the budget and raises the opponent tier.}}{6}{figure.4}\protected@file@percent }
+\newlabel{fig:elo-budget}{{4}{6}{\engine 's performance rating against a fixed Stockfish 18 Lite \code {UCI\_Elo}\,2400 tier, as a function of \engine 's own move budget (both engines search at the same per-move time). \Cref {tab:elo-tier} instead fixes the budget and raises the opponent tier}{figure.4}{}}
+\newlabel{fig:elo-budget@cref}{{[figure][4][]4}{[1][6][]6}{}{}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces \textsc  {Mojo}{} at a fixed 3{,}000\,ms move budget against rising Stockfish \texttt  {UCI\_Elo} tiers, up to Stockfish's calibrated ceiling.}}{6}{table.6}\protected@file@percent }
+\newlabel{tab:elo-tier}{{6}{6}{\engine {} at a fixed 3{,}000\,ms move budget against rising Stockfish \code {UCI\_Elo} tiers, up to Stockfish's calibrated ceiling}{table.6}{}}
+\newlabel{tab:elo-tier@cref}{{[table][6][]6}{[1][6][]6}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Regression test suite}{6}{subsection.6.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Backend-Free Regression Testing in the Page}{6}{section.7}\protected@file@percent }
+\newlabel{sec:comparison}{{7}{6}{Backend-Free Regression Testing in the Page}{section.7}{}}
+\newlabel{sec:comparison@cref}{{[section][7][]7}{[1][6][]6}{}{}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {8}Discussion and Limitations}{6}{section.8}\protected@file@percent }
+\newlabel{sec:limitations}{{8}{6}{Discussion and Limitations}{section.8}{}}
+\newlabel{sec:limitations@cref}{{[section][8][]8}{[1][6][]6}{}{}{}}
 \bibstyle{plainnat}
 \bibdata{references}
 \bibcite{cozychess2026}{{1}{2026}{{analog-hors}}{{}}}
@@ -92,17 +103,13 @@
 \bibcite{donninger1993null}{{7}{1993}{{Donninger}}{{}}}
 \bibcite{stockfishjs2026}{{8}{2026}{{Fiekas et~al.}}{{Fiekas, {nmrugg}, and {Stockfish Developers}}}}
 \bibcite{haas2017wasm}{{9}{2017}{{Haas et~al.}}{{Haas, Rossberg, Schuff, Titzer, Holman, Gohman, Wagner, Zakai, and Bastien}}}
-\@writefile{toc}{\contentsline {section}{\numberline {9}Discussion and Limitations}{9}{section.9}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {10}Conclusion}{9}{section.10}\protected@file@percent }
 \bibcite{heinz1998futility}{{10}{1998}{{Heinz}}{{}}}
-\bibcite{knuth1975alphabeta}{{11}{1975}{{Knuth and Moore}}{{}}}
-\bibcite{marsland1987sss}{{12}{1987}{{Marsland et~al.}}{{Marsland, Reinefeld, and Schaeffer}}}
-\bibcite{nasu2018nnue}{{13}{2018}{{Nasu}}{{}}}
-\bibcite{mojo2026software}{{14}{2026}{{sbharga}}{{}}}
-\bibcite{shannon1950chess}{{15}{1950}{{Shannon}}{{}}}
-\bibcite{spall1992spsa}{{16}{1992}{{Spall}}{{}}}
-\bibcite{stockfish2026}{{17}{2026}{{Stockfish Developers}}{{}}}
-\bibcite{thompson1986retrograde}{{18}{1986}{{Thompson}}{{}}}
-\bibcite{wald1945sprt}{{19}{1945}{{Wald}}{{}}}
-\bibcite{zobrist1970hashing}{{20}{1970}{{Zobrist}}{{}}}
-\gdef \@abspage@last{10}
+\bibcite{marsland1987sss}{{11}{1987}{{Marsland et~al.}}{{Marsland, Reinefeld, and Schaeffer}}}
+\bibcite{mojo2026software}{{12}{2026}{{sbharga}}{{}}}
+\bibcite{spall1992spsa}{{13}{1992}{{Spall}}{{}}}
+\bibcite{stockfish2026}{{14}{2026}{{Stockfish Developers}}{{}}}
+\bibcite{thompson1986retrograde}{{15}{1986}{{Thompson}}{{}}}
+\bibcite{wald1945sprt}{{16}{1945}{{Wald}}{{}}}
+\bibcite{zobrist1970hashing}{{17}{1970}{{Zobrist}}{{}}}
+\@writefile{toc}{\contentsline {section}{\numberline {9}Conclusion}{7}{section.9}\protected@file@percent }
+\gdef \@abspage@last{7}

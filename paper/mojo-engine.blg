@@ -3,44 +3,44 @@ Capacity: max_strings=200000, hash_size=200000, hash_prime=170003
 The top-level auxiliary file: mojo-engine.aux
 The style file: plainnat.bst
 Database file #1: references.bib
-You've used 20 entries,
+You've used 17 entries,
             2773 wiz_defined-function locations,
-            726 strings with 8147 characters,
-and the built_in function-call counts, 8549 in all, are:
-= -- 824
-> -- 365
-< -- 17
-+ -- 132
-- -- 111
-* -- 659
-:= -- 1327
-add.period$ -- 82
-call.type$ -- 20
-change.case$ -- 97
-chr.to.int$ -- 19
-cite$ -- 40
-duplicate$ -- 388
-empty$ -- 754
-format.name$ -- 133
-if$ -- 1791
+            706 strings with 7706 characters,
+and the built_in function-call counts, 7380 in all, are:
+= -- 710
+> -- 324
+< -- 14
++ -- 117
+- -- 99
+* -- 576
+:= -- 1149
+add.period$ -- 71
+call.type$ -- 17
+change.case$ -- 84
+chr.to.int$ -- 16
+cite$ -- 34
+duplicate$ -- 333
+empty$ -- 642
+format.name$ -- 116
+if$ -- 1543
 int.to.chr$ -- 2
 int.to.str$ -- 1
-missing$ -- 14
-newline$ -- 129
-num.names$ -- 80
-pop$ -- 177
+missing$ -- 12
+newline$ -- 112
+num.names$ -- 68
+pop$ -- 152
 preamble$ -- 1
-purify$ -- 77
+purify$ -- 67
 quote$ -- 0
-skip$ -- 285
+skip$ -- 243
 stack$ -- 0
-substring$ -- 376
-swap$ -- 32
+substring$ -- 320
+swap$ -- 29
 text.length$ -- 2
 text.prefix$ -- 0
 top$ -- 0
-type$ -- 220
+type$ -- 187
 warning$ -- 0
-while$ -- 89
+while$ -- 76
 width$ -- 0
-write$ -- 305
+write$ -- 263

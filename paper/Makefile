@@ -7,7 +7,9 @@ SOURCE := main.tex
 
 all: $(JOB).pdf
 
-$(JOB).pdf: $(SOURCE) references.bib data/fixed-depth.csv data/timed-depth.csv data/artifacts.csv
+$(JOB).pdf: $(SOURCE) references.bib data/fixed-depth.csv data/timed-depth.csv data/artifacts.csv \
+		data/coldstart.csv data/cancellation.csv data/seeding.csv \
+		data/elo-vs-budget-budget.csv data/elo-vs-budget-tier.csv
 	$(PDFLATEX) -interaction=nonstopmode -halt-on-error -jobname=$(JOB) $(SOURCE)
 	$(BIBTEX) $(JOB)
 	$(PDFLATEX) -interaction=nonstopmode -halt-on-error -jobname=$(JOB) $(SOURCE)
